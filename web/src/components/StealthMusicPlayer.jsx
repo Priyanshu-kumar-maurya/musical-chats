@@ -308,53 +308,7 @@ function extractYouTubeId(url) {
   return match ? match[1] : null;
 }
 
-// Generates a clean inaudible PCM silent WAV loop to keep mobile OS background audio pipeline alive
-function generateSilentWavDataUri() {
-  try {
-    const sampleRate = 8000;
-    const numChannels = 1;
-    const bitsPerSample = 8;
-    const seconds = 2;
-    const numSamples = sampleRate * seconds;
-    const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-    const blockAlign = numChannels * (bitsPerSample / 8);
-    const dataSize = numSamples * blockAlign;
-    const buffer = new ArrayBuffer(44 + dataSize);
-    const view = new DataView(buffer);
 
-    // RIFF identifier
-    view.setUint8(0, 0x52); view.setUint8(1, 0x49); view.setUint8(2, 0x46); view.setUint8(3, 0x46); // 'RIFF'
-    view.setUint32(4, 36 + dataSize, true);
-    view.setUint8(8, 0x57); view.setUint8(9, 0x41); view.setUint8(10, 0x56); view.setUint8(11, 0x45); // 'WAVE'
-    // format chunk
-    view.setUint8(12, 0x66); view.setUint8(13, 0x6d); view.setUint8(14, 0x74); view.setUint8(15, 0x20); // 'fmt '
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); // PCM
-    view.setUint16(22, numChannels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, byteRate, true);
-    view.setUint16(32, blockAlign, true);
-    view.setUint16(34, bitsPerSample, true);
-    // data chunk
-    view.setUint8(36, 0x64); view.setUint8(37, 0x61); view.setUint8(38, 0x74); view.setUint8(39, 0x61); // 'data'
-    view.setUint32(40, dataSize, true);
-
-    const bytes = new Uint8Array(buffer, 44, dataSize);
-    bytes.fill(128); // 8-bit PCM neutral zero level
-
-    let binary = '';
-    const u8 = new Uint8Array(buffer);
-    const len = u8.length;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(u8[i]);
-    }
-    return 'data:audio/wav;base64,' + btoa(binary);
-  } catch (e) {
-    return 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
-  }
-}
-
-const SILENT_AUDIO_URI = generateSilentWavDataUri();
 
 const CURATED_PLAYLISTS = [
   {
@@ -662,7 +616,6 @@ export default function StealthMusicPlayer({
 
   // Audio elements
   const audioRef = useRef(null);
-  const backgroundKeepAliveRef = useRef(null);
   const fileInputRef = useRef(null);
   const iframeRef = useRef(null);
 
@@ -717,7 +670,7 @@ export default function StealthMusicPlayer({
   }, [currentTime]);
 
   // =========================================================================
-  // Background Keep-Alive Audio & OS MediaSession Integration (Phone Lock Screen)
+  // OS MediaSession, Native Android & Lock Screen System Notifications
   // =========================================================================
   // 1. Setup metadata & permanent action handlers when currentTrack changes
   useEffect(() => {
@@ -730,16 +683,22 @@ export default function StealthMusicPlayer({
         artist: currentTrack.artist || "Online Stream",
         album: currentTrack.album || "Stealth Music Lounge",
         artwork: [
-          { src: art, sizes: '96x96', type: 'image/jpeg' },
-          { src: art, sizes: '128x128', type: 'image/jpeg' },
-          { src: art, sizes: '192x192', type: 'image/jpeg' },
-          { src: art, sizes: '256x256', type: 'image/jpeg' },
-          { src: art, sizes: '384x384', type: 'image/jpeg' },
-          { src: art, sizes: '512x512', type: 'image/jpeg' }
+          { src: art, sizes: '96x96' },
+          { src: art, sizes: '128x128' },
+          { src: art, sizes: '192x192' },
+          { src: art, sizes: '256x256' },
+          { src: art, sizes: '384x384' },
+          { src: art, sizes: '512x512' }
         ]
       });
 
-      navigator.mediaSession.setActionHandler('play', () => {
+      const setHandler = (action, fn) => {
+        try {
+          navigator.mediaSession.setActionHandler(action, fn);
+        } catch (e) {}
+      };
+
+      setHandler('play', () => {
         setIsPlaying(true);
         if (currentTrack.url && audioRef.current) {
           audioRef.current.play().catch(() => {});
@@ -753,7 +712,7 @@ export default function StealthMusicPlayer({
         }
       });
 
-      navigator.mediaSession.setActionHandler('pause', () => {
+      setHandler('pause', () => {
         setIsPlaying(false);
         if (audioRef.current) audioRef.current.pause();
         if (currentTrack.isYoutube && iframeRef.current?.contentWindow) {
@@ -766,15 +725,15 @@ export default function StealthMusicPlayer({
         }
       });
 
-      navigator.mediaSession.setActionHandler('nexttrack', () => {
+      setHandler('nexttrack', () => {
         handleNextTrack();
       });
 
-      navigator.mediaSession.setActionHandler('previoustrack', () => {
+      setHandler('previoustrack', () => {
         handlePrevTrack();
       });
 
-      navigator.mediaSession.setActionHandler('seekto', (details) => {
+      setHandler('seekto', (details) => {
         if (typeof details.seekTime === 'number') {
           const seekSec = Math.floor(details.seekTime);
           setCurrentTime(seekSec);
@@ -791,7 +750,7 @@ export default function StealthMusicPlayer({
         }
       });
 
-      navigator.mediaSession.setActionHandler('seekbackward', () => {
+      setHandler('seekbackward', () => {
         setCurrentTime(prev => {
           const newTime = Math.max(0, prev - 10);
           if (currentTrack.url && audioRef.current) {
@@ -808,7 +767,7 @@ export default function StealthMusicPlayer({
         });
       });
 
-      navigator.mediaSession.setActionHandler('seekforward', () => {
+      setHandler('seekforward', () => {
         setCurrentTime(prev => {
           const newTime = Math.min(duration || 300, prev + 10);
           if (currentTrack.url && audioRef.current) {
@@ -825,7 +784,7 @@ export default function StealthMusicPlayer({
         });
       });
 
-      navigator.mediaSession.setActionHandler('stop', () => {
+      setHandler('stop', () => {
         setIsPlaying(false);
         if (audioRef.current) audioRef.current.pause();
         if (iframeRef.current?.contentWindow) {
@@ -842,14 +801,43 @@ export default function StealthMusicPlayer({
     }
   }, [currentTrack, duration, handleNextTrack, handlePrevTrack]);
 
-  // 2. Synchronize playbackState with isPlaying
+  // 2. Synchronize playbackState with isPlaying across MediaSession, Native Android & Service Worker
   useEffect(() => {
     if ('mediaSession' in navigator) {
       try {
         navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
       } catch (e) {}
     }
-  }, [isPlaying]);
+
+    // Direct Native Android Notification sync (Capacitor APK)
+    if (typeof window !== 'undefined' && window.AndroidNativeMedia?.updateMedia && currentTrack) {
+      try {
+        window.AndroidNativeMedia.updateMedia(
+          currentTrack.title || "Secret-Bubble Music",
+          currentTrack.artist || "Online Stream",
+          currentTrack.album || "Stealth Lounge",
+          currentTrack.artwork || "",
+          Boolean(isPlaying),
+          Number(duration || 0),
+          Number(currentTime || 0)
+        );
+      } catch (e) {}
+    }
+
+    // Web Service Worker notification tray fallback (PWA / Mobile Chrome)
+    if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller && currentTrack) {
+      try {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'UPDATE_MEDIA_NOTIFICATION',
+          title: currentTrack.title || 'Secret-Bubble Music',
+          artist: currentTrack.artist || 'Online Stream',
+          artwork: currentTrack.artwork || '',
+          isPlaying: Boolean(isPlaying),
+          action: isPlaying ? 'update' : 'pause'
+        });
+      } catch (e) {}
+    }
+  }, [isPlaying, currentTrack, duration, currentTime]);
 
   // 3. Synchronize lock screen progress bar position
   useEffect(() => {
@@ -864,18 +852,107 @@ export default function StealthMusicPlayer({
     }
   }, [currentTime, duration]);
 
-  // 4. Background audio keep-alive (ensures Android OS maintains active audio pipeline for notification tray)
+  // 4. Listen to external lock screen & notification controls (Native Android + Service Worker)
   useEffect(() => {
-    const bgAudio = backgroundKeepAliveRef.current;
-    if (!bgAudio) return;
+    const handleAction = (action, val) => {
+      if (action === 'play') {
+        setIsPlaying(true);
+        if (currentTrack?.url && audioRef.current) {
+          audioRef.current.play().catch(() => {});
+        } else if (currentTrack?.isYoutube && iframeRef.current?.contentWindow) {
+          try {
+            iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
+              '*'
+            );
+          } catch (e) {}
+        }
+      } else if (action === 'pause') {
+        setIsPlaying(false);
+        if (audioRef.current) audioRef.current.pause();
+        if (currentTrack?.isYoutube && iframeRef.current?.contentWindow) {
+          try {
+            iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+              '*'
+            );
+          } catch (e) {}
+        }
+      } else if (action === 'next') {
+        handleNextTrack();
+      } else if (action === 'prev') {
+        handlePrevTrack();
+      } else if (action === 'seek' && typeof val === 'number') {
+        setCurrentTime(val);
+        if (audioRef.current && currentTrack?.url) {
+          audioRef.current.currentTime = val;
+        } else if (currentTrack?.isYoutube && iframeRef.current?.contentWindow) {
+          try {
+            iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'seekTo', args: [val, true] }),
+              '*'
+            );
+          } catch (e) {}
+        }
+      }
+    };
+
+    const handleNative = (e) => {
+      if (e.detail?.action) {
+        handleAction(e.detail.action, e.detail.value);
+      }
+    };
+    window.addEventListener('nativeMediaAction', handleNative);
+
+    const handleSw = (e) => {
+      if (e.data?.type === 'MEDIA_NOTIFICATION_ACTION' && e.data.action) {
+        handleAction(e.data.action);
+      }
+    };
+    navigator.serviceWorker?.addEventListener('message', handleSw);
+
+    return () => {
+      window.removeEventListener('nativeMediaAction', handleNative);
+      navigator.serviceWorker?.removeEventListener('message', handleSw);
+    };
+  }, [currentTrack, handleNextTrack, handlePrevTrack]);
+
+  // 5. Screen Wake Lock & Background Audio Resume (Prevents songs stopping after some time)
+  useEffect(() => {
+    let wakeLock = null;
+    const acquireWake = async () => {
+      if ('wakeLock' in navigator && isPlaying && document.visibilityState === 'visible') {
+        try {
+          wakeLock = await navigator.wakeLock.request('screen');
+        } catch (e) {}
+      }
+    };
 
     if (isPlaying) {
-      bgAudio.volume = 0.001;
-      bgAudio.play().catch(() => {});
-    } else {
-      bgAudio.pause();
+      acquireWake();
     }
-  }, [isPlaying]);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        if (isPlaying) {
+          acquireWake();
+          // Auto-resume if mobile OS throttled HTML5 audio during screen sleep
+          if (audioRef.current && currentTrack?.url && audioRef.current.paused) {
+            audioRef.current.play().catch(() => {});
+          }
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+      }
+    };
+  }, [isPlaying, currentTrack]);
 
 
   const getBackendApiUrl = useCallback(() => {
@@ -1097,6 +1174,41 @@ export default function StealthMusicPlayer({
     }
   };
 
+  const handleAudioError = (e) => {
+    console.warn('Audio stream playback error, attempting recovery:', e);
+    const audio = audioRef.current;
+    if (!audio || !currentTrack?.url) return;
+
+    // Resilient fallback: JioSaavn bitrate step-down from 320 to 160 to 96
+    if (currentTrack.url.includes('_320.mp4')) {
+      const fallback160 = currentTrack.url.replace('_320.mp4', '_160.mp4');
+      audio.src = fallback160;
+      audio.load();
+      if (isPlaying) audio.play().catch(() => {});
+      return;
+    } else if (currentTrack.url.includes('_160.mp4')) {
+      const fallback96 = currentTrack.url.replace('_160.mp4', '_96.mp4');
+      audio.src = fallback96;
+      audio.load();
+      if (isPlaying) audio.play().catch(() => {});
+      return;
+    }
+
+    // Auto-advance if stream is completely unreachable
+    setTimeout(() => {
+      handleNextTrack();
+    }, 1200);
+  };
+
+  const handleAudioWaiting = () => {
+    // If mobile connection pauses stream buffer, gently check after 3s to resume
+    setTimeout(() => {
+      if (isPlaying && audioRef.current && audioRef.current.paused) {
+        audioRef.current.play().catch(() => {});
+      }
+    }, 3000);
+  };
+
   const handleTrackEnded = () => {
     if (isRepeat) {
       if (audioRef.current) {
@@ -1132,6 +1244,9 @@ export default function StealthMusicPlayer({
     setIsPlaying(nextPlay);
     if (nextPlay) {
       logMusicTelemetry(currentTrack);
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {});
+      }
     }
     if (currentTrack?.isYoutube && iframeRef.current?.contentWindow) {
       try {
@@ -1865,20 +1980,16 @@ export default function StealthMusicPlayer({
   return (
     <div className="fixed inset-0 z-50 flex flex-col justify-between bg-[#121212] text-[#b3b3b3] select-none font-sans overflow-hidden">
       
-      {/* Background audio keep-alive (silently ensures mobile OS does not pause background stream) */}
-      <audio
-        ref={backgroundKeepAliveRef}
-        src={SILENT_AUDIO_URI}
-        loop
-        playsInline
-      />
-
-      {/* Real HTML5 Audio Element for Online Streams & Phone Storage */}
+      {/* Real High-Fidelity HTML5 Audio Element for Online Streams & Phone Storage */}
       <audio
         ref={audioRef}
+        preload="auto"
+        crossOrigin="anonymous"
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onEnded={handleTrackEnded}
+        onError={handleAudioError}
+        onWaiting={handleAudioWaiting}
         playsInline
       />
 
@@ -1931,7 +2042,7 @@ export default function StealthMusicPlayer({
           VIEW 1: Spotify Main Music Lounge & Browser
           ========================================================================= */}
       {viewMode === 'list' && (
-        <div className="flex-1 flex flex-col w-full h-full overflow-hidden pb-20 relative">
+        <div className="flex-1 flex flex-col w-full h-full overflow-hidden pb-32 relative">
           
           {/* Ambient Video Background Layer in List View */}
           {backgroundVideoEnabled && isPlaying && currentTrack?.youtubeId && (
@@ -1949,7 +2060,7 @@ export default function StealthMusicPlayer({
           )}
 
           {/* Top Header with User Branding & Search */}
-          <div className="bg-[#121212]/95 backdrop-blur-md sticky top-0 z-30 px-3 sm:px-8 py-2.5 sm:py-3 border-b border-[#242424]/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 shrink-0">
+          <div className="bg-[#121212]/95 backdrop-blur-md sticky top-0 z-30 px-3 sm:px-8 pt-[max(0.625rem,env(safe-area-inset-top))] pb-2.5 sm:py-3 border-b border-[#242424]/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 shrink-0">
             {/* Row 1 on Mobile / Left Column on Desktop: Brand Logo + Mobile Action Bar */}
             <div className="flex items-center justify-between gap-2 w-full sm:w-auto">
               {/* Brand Logo & Name */}
@@ -3169,7 +3280,7 @@ export default function StealthMusicPlayer({
           </div>
 
           {/* Spotify Fixed Bottom Player Bar (Classic 3-column Spotify Player) */}
-          <div className="fixed bottom-0 inset-x-0 z-40 bg-[#181818] border-t border-[#282828] px-3 sm:px-6 py-2 sm:py-3 shadow-2xl flex items-center justify-between gap-3 sm:gap-6 h-20 sm:h-22 select-none">
+          <div className="fixed bottom-0 inset-x-0 z-40 bg-[#181818] border-t border-[#282828] px-3 sm:px-6 pt-2 pb-[max(0.625rem,env(safe-area-inset-bottom))] shadow-2xl flex items-center justify-between gap-3 sm:gap-6 min-h-[5rem] select-none">
             
             {/* Column 1 (Left): Currently Playing Song Info */}
             <div className="flex items-center gap-3 min-w-0 w-[45%] sm:w-[30%]">
@@ -3363,7 +3474,7 @@ export default function StealthMusicPlayer({
           )}
 
           {/* Top Bar */}
-          <div className="flex items-center justify-between w-full pt-1 relative z-10">
+          <div className="flex items-center justify-between w-full pt-[max(0.75rem,env(safe-area-inset-top))] pb-1 relative z-10">
             <button
               onClick={() => setViewMode('list')}
               className="p-2 text-[#b3b3b3] hover:text-white rounded-full hover:bg-[#282828] transition cursor-pointer"

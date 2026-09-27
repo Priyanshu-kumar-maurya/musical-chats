@@ -228,7 +228,7 @@ export default function ChatInput({
                 type={showPasscodeText ? "text" : "password"}
                 value={passcode}
                 onChange={(e) => setPasscode(e.target.value)}
-                placeholder="Set password (e.g. 1234 or secret)..."
+                placeholder="Set custom secret password..."
                 className="w-full pl-8 pr-8 py-2 bg-slate-900 border border-amber-500/40 focus:border-amber-400 rounded-xl text-xs text-white placeholder:text-slate-500 focus:outline-none"
                 autoFocus
               />
@@ -247,17 +247,9 @@ export default function ChatInput({
                 type="text"
                 value={passcodeHint}
                 onChange={(e) => setPasscodeHint(e.target.value)}
-                placeholder="Password hint for reader (optional)..."
-                className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 focus:border-amber-400 rounded-xl text-xs text-white placeholder:text-slate-500 focus:outline-none"
+                placeholder="Optional reminder / clue for recipient..."
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-700 focus:border-amber-400 rounded-xl text-xs text-white placeholder:text-slate-500 focus:outline-none"
               />
-              <button
-                type="button"
-                onClick={() => { setPasscode('1234'); setPasscodeHint('1234'); }}
-                className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[10px] font-bold text-amber-300 shrink-0 cursor-pointer"
-                title="Use quick PIN: 1234"
-              >
-                PIN: 1234
-              </button>
             </div>
           </div>
 
@@ -361,6 +353,11 @@ export default function ChatInput({
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder={isLocked ? "Type private message (masked by biometrics)..." : "Write a message or @meta ai..."}
+              autoComplete="on"
+              autoCorrect="on"
+              spellCheck="true"
+              autoCapitalize="sentences"
+              enterKeyHint="send"
               className={`w-full py-2.5 sm:py-3 pl-4 pr-10 bg-slate-950/90 border rounded-2xl text-sm text-white placeholder-slate-500 focus:outline-none transition ${
                 isLocked
                   ? 'border-purple-500/80 focus:ring-1 focus:ring-purple-500/30'

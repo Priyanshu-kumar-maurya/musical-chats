@@ -20,7 +20,7 @@ export default function ChatHeader({
   const isMetaAi = target?.id === 'user-meta-ai' || target?.isBot;
 
   return (
-    <header className="px-4 py-3 bg-slate-900/95 border-b border-slate-800/80 flex items-center justify-between gap-3 sticky top-0 z-20 backdrop-blur-xl select-none font-sans">
+    <header className="px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 bg-slate-900/95 border-b border-slate-800/80 flex items-center justify-between gap-3 sticky top-0 z-20 backdrop-blur-xl select-none font-sans">
       
       {/* Target Info (Direct Friend, Global Channel, or Meta AI) */}
       <div className="flex items-center gap-3 min-w-0">
