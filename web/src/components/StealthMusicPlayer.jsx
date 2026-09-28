@@ -6,7 +6,7 @@ import {
   HardDrive, Smartphone, Music2, Plus, Search, 
   Globe, Flame, ExternalLink, Loader2, Video, Eye, EyeOff,
   Headphones, ChevronDown, ChevronUp, RadioTower, KeyRound, AlertCircle, Download,
-  ListMusic, ArrowLeft, Trash2, User
+  ListMusic, ArrowLeft, Trash2, User, Maximize2
 } from 'lucide-react';
 
 const FEATURED_ONLINE_TRACKS = [
@@ -211,6 +211,7 @@ const FEATURED_ONLINE_TRACKS = [
 // Continuous procedural fallback pool to guarantee non-stop songs even if offline
 const BACKUP_STREAM_POOL = [
   {
+    id: "stream-pool-o-maahi",
     title: "O Maahi - Dunki",
     artist: "Pritam, Arijit Singh, Irshad Kamil",
     album: "Dunki",
@@ -218,9 +219,11 @@ const BACKUP_STREAM_POOL = [
     durationText: "3:53",
     url: "https://aac.saavncdn.com/871/c2febd353f3a076a406fa37510f31f9f_320.mp4",
     artwork: "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=500&q=80",
+    youtubeId: "S_y0x9_Z4vI",
     isAudioStream: true
   },
   {
+    id: "stream-pool-ve-kamleya",
     title: "Ve Kamleya - Rocky Aur Rani",
     artist: "Pritam, Arijit Singh, Shreya Ghoshal",
     album: "Rocky Aur Rani Kii Prem Kahaani",
@@ -228,9 +231,11 @@ const BACKUP_STREAM_POOL = [
     durationText: "4:07",
     url: "https://aac.saavncdn.com/022/a192e8d320ea5630db314d04fedf0aa5_320.mp4",
     artwork: "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80",
+    youtubeId: "p842fU2yHkE",
     isAudioStream: true
   },
   {
+    id: "stream-pool-shayad",
     title: "Shayad - Love Aaj Kal",
     artist: "Pritam, Arijit Singh",
     album: "Love Aaj Kal",
@@ -238,9 +243,11 @@ const BACKUP_STREAM_POOL = [
     durationText: "4:08",
     url: "https://aac.saavncdn.com/815/483a6e118e8108cbb3e5cd8701674f32_320.mp4",
     artwork: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=500&q=80",
+    youtubeId: "vqu2s2yU9-g",
     isAudioStream: true
   },
   {
+    id: "stream-pool-dil-diyan-gallan",
     title: "Dil Diyan Gallan",
     artist: "Atif Aslam, Vishal-Shekhar",
     album: "Tiger Zinda Hai",
@@ -248,9 +255,11 @@ const BACKUP_STREAM_POOL = [
     durationText: "4:20",
     url: "https://aac.saavncdn.com/430/5c5ea5cc00e3bff45616013226f376fe_320.mp4",
     artwork: "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?w=500&q=80",
+    youtubeId: "mevO4I0HyvU",
     isAudioStream: true
   },
   {
+    id: "stream-pool-tere-hawaale",
     title: "Tere Hawaale - Laal Singh Chaddha",
     artist: "Arijit Singh, Shilpa Rao, Pritam",
     album: "Laal Singh Chaddha",
@@ -258,9 +267,11 @@ const BACKUP_STREAM_POOL = [
     durationText: "5:34",
     url: "https://aac.saavncdn.com/238/35726d4394604604e961bf5b846870d0_320.mp4",
     artwork: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80",
+    youtubeId: "KUpwupYj_tY",
     isAudioStream: true
   },
   {
+    id: "stream-pool-beete-lamhein",
     title: "Beete Lamhein - The Train",
     artist: "KK, Mithoon",
     album: "The Train",
@@ -268,9 +279,11 @@ const BACKUP_STREAM_POOL = [
     durationText: "4:35",
     url: "https://aac.saavncdn.com/801/571617f7810fb699ed56bc8a7d9e40d9_320.mp4",
     artwork: "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=500&q=80",
+    youtubeId: "8Znd7v1aE2M",
     isAudioStream: true
   },
   {
+    id: "stream-pool-excuses",
     title: "Excuses - Intense",
     artist: "AP Dhillon, Gurinder Gill",
     album: "Excuses",
@@ -278,9 +291,11 @@ const BACKUP_STREAM_POOL = [
     durationText: "2:56",
     url: "https://aac.saavncdn.com/973/76216adb3df5ef476f948891b40efb7a_320.mp4",
     artwork: "https://images.unsplash.com/photo-1445985543470-41fdd6ce388d?w=500&q=80",
+    youtubeId: "vX2cDW8LUWk",
     isAudioStream: true
   },
   {
+    id: "stream-pool-agar-tum-saath-ho",
     title: "Agar Tum Saath Ho - Tamasha",
     artist: "A.R. Rahman, Alka Yagnik, Arijit Singh",
     album: "Tamasha",
@@ -288,6 +303,7 @@ const BACKUP_STREAM_POOL = [
     durationText: "5:41",
     url: "https://aac.saavncdn.com/047/d1366530468931703ac909e82a3ee788_320.mp4",
     artwork: "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=500&q=80",
+    youtubeId: "sK7riqg2mr4",
     isAudioStream: true
   }
 ];
@@ -614,12 +630,70 @@ export default function StealthMusicPlayer({
   const [codeError, setCodeError] = useState('');
   const [showHelpModal, setShowHelpModal] = useState(false);
 
-  // Audio elements
+  // Audio and video elements
   const audioRef = useRef(null);
   const fileInputRef = useRef(null);
   const iframeRef = useRef(null);
+  const canvasIframeRef = useRef(null);
+  const canvasSlotRef = useRef(null);
+  const [canvasSlotRect, setCanvasSlotRect] = useState(null);
+  const modalVideoIframeRef = useRef(null);
 
   const currentTrack = tracks[currentTrackIndex] || tracks[0];
+
+  // Track bounding rectangle of center-stage video canvas slot for seamless YouTube positioning
+  useEffect(() => {
+    if (viewMode === 'nowPlaying' && canvasMode === 'canvas' && canvasSlotRef.current) {
+      const updateRect = () => {
+        if (canvasSlotRef.current) {
+          const r = canvasSlotRef.current.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            setCanvasSlotRect({
+              top: Math.round(r.top),
+              left: Math.round(r.left),
+              width: Math.round(r.width),
+              height: Math.round(r.height)
+            });
+          }
+        }
+      };
+      updateRect();
+      window.addEventListener('resize', updateRect);
+      window.addEventListener('scroll', updateRect);
+      const timer = setTimeout(updateRect, 100);
+      const interval = setInterval(updateRect, 1000);
+      return () => {
+        window.removeEventListener('resize', updateRect);
+        window.removeEventListener('scroll', updateRect);
+        clearTimeout(timer);
+        clearInterval(interval);
+      };
+    } else {
+      setCanvasSlotRect(null);
+    }
+  }, [viewMode, canvasMode]);
+
+  // Synchronize play/pause with canvas iframe
+  useEffect(() => {
+    if (canvasIframeRef.current?.contentWindow) {
+      try {
+        const cmd = isPlaying ? 'playVideo' : 'pauseVideo';
+        canvasIframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func: cmd, args: [] }),
+          '*'
+        );
+      } catch (e) {}
+    }
+  }, [isPlaying, canvasMode]);
+
+  // Pause HTML5 audio when Full Video modal is active on an audio track so sound does not duplicate
+  useEffect(() => {
+    if (showVideoMode && !currentTrack?.isYoutube && audioRef.current) {
+      audioRef.current.pause();
+    } else if (!showVideoMode && !currentTrack?.isYoutube && isPlaying && audioRef.current) {
+      audioRef.current.play().catch(() => {});
+    }
+  }, [showVideoMode, currentTrack, isPlaying]);
 
   // Helper for Next/Previous tracks
   const handleNextTrack = useCallback(() => {
@@ -710,6 +784,14 @@ export default function StealthMusicPlayer({
             );
           } catch (e) {}
         }
+        if (canvasIframeRef.current?.contentWindow) {
+          try {
+            canvasIframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
+              '*'
+            );
+          } catch (e) {}
+        }
       });
 
       setHandler('pause', () => {
@@ -718,6 +800,14 @@ export default function StealthMusicPlayer({
         if (currentTrack.isYoutube && iframeRef.current?.contentWindow) {
           try {
             iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+              '*'
+            );
+          } catch (e) {}
+        }
+        if (canvasIframeRef.current?.contentWindow) {
+          try {
+            canvasIframeRef.current.contentWindow.postMessage(
               JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
               '*'
             );
@@ -747,6 +837,14 @@ export default function StealthMusicPlayer({
               );
             } catch (e) {}
           }
+          if (canvasIframeRef.current?.contentWindow) {
+            try {
+              canvasIframeRef.current.contentWindow.postMessage(
+                JSON.stringify({ event: 'command', func: 'seekTo', args: [seekSec, true] }),
+                '*'
+              );
+            } catch (e) {}
+          }
         }
       });
 
@@ -758,6 +856,14 @@ export default function StealthMusicPlayer({
           } else if (currentTrack.isYoutube && iframeRef.current?.contentWindow) {
             try {
               iframeRef.current.contentWindow.postMessage(
+                JSON.stringify({ event: 'command', func: 'seekTo', args: [newTime, true] }),
+                '*'
+              );
+            } catch (e) {}
+          }
+          if (canvasIframeRef.current?.contentWindow) {
+            try {
+              canvasIframeRef.current.contentWindow.postMessage(
                 JSON.stringify({ event: 'command', func: 'seekTo', args: [newTime, true] }),
                 '*'
               );
@@ -780,6 +886,14 @@ export default function StealthMusicPlayer({
               );
             } catch (e) {}
           }
+          if (canvasIframeRef.current?.contentWindow) {
+            try {
+              canvasIframeRef.current.contentWindow.postMessage(
+                JSON.stringify({ event: 'command', func: 'seekTo', args: [newTime, true] }),
+                '*'
+              );
+            } catch (e) {}
+          }
           return newTime;
         });
       });
@@ -790,6 +904,14 @@ export default function StealthMusicPlayer({
         if (iframeRef.current?.contentWindow) {
           try {
             iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+              '*'
+            );
+          } catch (e) {}
+        }
+        if (canvasIframeRef.current?.contentWindow) {
+          try {
+            canvasIframeRef.current.contentWindow.postMessage(
               JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
               '*'
             );
@@ -867,12 +989,28 @@ export default function StealthMusicPlayer({
             );
           } catch (e) {}
         }
+        if (canvasIframeRef.current?.contentWindow) {
+          try {
+            canvasIframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
+              '*'
+            );
+          } catch (e) {}
+        }
       } else if (action === 'pause') {
         setIsPlaying(false);
         if (audioRef.current) audioRef.current.pause();
         if (currentTrack?.isYoutube && iframeRef.current?.contentWindow) {
           try {
             iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+              '*'
+            );
+          } catch (e) {}
+        }
+        if (canvasIframeRef.current?.contentWindow) {
+          try {
+            canvasIframeRef.current.contentWindow.postMessage(
               JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
               '*'
             );
@@ -889,6 +1027,14 @@ export default function StealthMusicPlayer({
         } else if (currentTrack?.isYoutube && iframeRef.current?.contentWindow) {
           try {
             iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'seekTo', args: [val, true] }),
+              '*'
+            );
+          } catch (e) {}
+        }
+        if (canvasIframeRef.current?.contentWindow) {
+          try {
+            canvasIframeRef.current.contentWindow.postMessage(
               JSON.stringify({ event: 'command', func: 'seekTo', args: [val, true] }),
               '*'
             );
@@ -1257,6 +1403,15 @@ export default function StealthMusicPlayer({
         );
       } catch (e) {}
     }
+    if (canvasIframeRef.current?.contentWindow) {
+      try {
+        const cmd = nextPlay ? 'playVideo' : 'pauseVideo';
+        canvasIframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func: cmd, args: [] }),
+          '*'
+        );
+      } catch (e) {}
+    }
   };
 
   const handleSeek = (e) => {
@@ -1271,6 +1426,14 @@ export default function StealthMusicPlayer({
     } else if (currentTrack?.isYoutube && iframeRef.current?.contentWindow) {
       try {
         iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func: 'seekTo', args: [newTime, true] }),
+          '*'
+        );
+      } catch (e) {}
+    }
+    if (canvasIframeRef.current?.contentWindow) {
+      try {
+        canvasIframeRef.current.contentWindow.postMessage(
           JSON.stringify({ event: 'command', func: 'seekTo', args: [newTime, true] }),
           '*'
         );
@@ -1993,37 +2156,186 @@ export default function StealthMusicPlayer({
         playsInline
       />
 
-      {/* Persistent YouTube Audio/Video Frame */}
+      {/* Persistent YouTube Audio/Video Frame for YouTube stream tracks */}
       {currentTrack.isYoutube && (
         <div 
+          style={
+            showVideoMode
+              ? undefined
+              : (viewMode === 'nowPlaying' && canvasMode === 'canvas' && canvasSlotRect)
+                ? {
+                    position: 'fixed',
+                    top: `${canvasSlotRect.top}px`,
+                    left: `${canvasSlotRect.left}px`,
+                    width: `${canvasSlotRect.width}px`,
+                    height: `${canvasSlotRect.height}px`,
+                    zIndex: 20
+                  }
+                : undefined
+          }
           className={
             showVideoMode 
-              ? "fixed top-14 left-1/2 -translate-x-1/2 z-40 w-[92%] max-w-md p-2 animate-in zoom-in-95 duration-200" 
-              : (viewMode === 'nowPlaying' && canvasMode === 'canvas')
-                ? "fixed top-[45%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 w-64 h-64 sm:w-72 sm:h-72 p-0 animate-in zoom-in-95 duration-200"
+              ? "fixed inset-0 z-50 bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200" 
+              : (viewMode === 'nowPlaying' && canvasMode === 'canvas' && canvasSlotRect)
+                ? "rounded-2xl overflow-hidden shadow-2xl border border-white/20 bg-black group"
                 : "fixed top-0 left-0 w-2 h-2 opacity-[0.001] pointer-events-none overflow-hidden -z-50"
           }
         >
-          <div className="relative w-full h-full rounded-2xl overflow-hidden shadow-2xl border border-white/20 bg-black">
-            <iframe
-              ref={iframeRef}
-              key={currentTrack.youtubeId}
-              src={`https://www.youtube.com/embed/${currentTrack.youtubeId}?autoplay=${isPlaying ? 1 : 0}&enablejsapi=1&playsinline=1&rel=0&modestbranding=1`}
-              title={currentTrack.title}
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              referrerPolicy="no-referrer-when-downgrade"
-              allowFullScreen
-              className="w-full h-full"
-            />
-            {showVideoMode && (
-              <button
-                onClick={() => setShowVideoMode(false)}
-                className="absolute top-2 right-2 p-1.5 rounded-full bg-black/80 hover:bg-black text-white text-xs"
-                title="Minimize Video"
+          {showVideoMode ? (
+            <div className="w-full max-w-2xl flex flex-col gap-3">
+              {/* Modal Top Bar */}
+              <div className="flex items-center justify-between text-white px-1">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="p-2 rounded-full bg-[#1ed760]/20 text-[#1ed760]">
+                    <Video className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-sm sm:text-base truncate">{currentTrack.title}</h3>
+                    <p className="text-xs text-[#b3b3b3] truncate">{currentTrack.artist} • Official Music Video</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {currentTrack.youtubeId && (
+                    <a
+                      href={`https://www.youtube.com/watch?v=${currentTrack.youtubeId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1 rounded-full bg-[#282828] hover:bg-[#333] text-xs font-medium text-white flex items-center gap-1.5 transition border border-white/10"
+                      title="Watch directly on YouTube"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 text-[#1ed760]" />
+                      <span className="hidden sm:inline">YouTube</span>
+                    </a>
+                  )}
+                  <button
+                    onClick={() => setShowVideoMode(false)}
+                    className="p-2 rounded-full bg-[#282828] hover:bg-[#383838] text-white transition active:scale-95 cursor-pointer"
+                    title="Close Video"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* 16:9 Video Player Container */}
+              <div className="relative w-full aspect-video rounded-2xl overflow-hidden shadow-2xl border border-white/20 bg-black">
+                <iframe
+                  ref={iframeRef}
+                  key={currentTrack.youtubeId}
+                  src={`https://www.youtube-nocookie.com/embed/${currentTrack.youtubeId}?autoplay=${isPlaying ? 1 : 0}&enablejsapi=1&playsinline=1&rel=0&modestbranding=1&controls=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
+                  title={currentTrack.title}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  referrerPolicy="strict-origin-when-cross-origin"
+                  allowFullScreen
+                  className="w-full h-full"
+                />
+              </div>
+
+              {/* Modal Footer */}
+              <div className="flex items-center justify-between text-[11px] text-[#b3b3b3] px-1">
+                <span>Direct audio stream synced</span>
+                {currentTrack.youtubeId && (
+                  <a
+                    href={`https://www.youtube.com/watch?v=${currentTrack.youtubeId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#1ed760] hover:underline flex items-center gap-1"
+                  >
+                    Open on YouTube <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="relative w-full h-full">
+              <iframe
+                ref={iframeRef}
+                key={currentTrack.youtubeId}
+                src={`https://www.youtube-nocookie.com/embed/${currentTrack.youtubeId}?autoplay=${isPlaying ? 1 : 0}&enablejsapi=1&playsinline=1&rel=0&modestbranding=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
+                title={currentTrack.title}
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allowFullScreen
+                className="w-full h-full"
+              />
+              {viewMode === 'nowPlaying' && canvasMode === 'canvas' && (
+                <button
+                  type="button"
+                  onClick={() => setShowVideoMode(true)}
+                  className="absolute top-2.5 right-2.5 p-1.5 rounded-full bg-black/70 hover:bg-black text-white hover:text-[#1ed760] transition shadow-lg z-30 cursor-pointer"
+                  title="Watch Full Video"
+                  aria-label="Watch Full Video"
+                >
+                  <Maximize2 className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Full Video Modal for Direct Audio Tracks with Video Canvas */}
+      {showVideoMode && !currentTrack.isYoutube && currentTrack.youtubeId && (
+        <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
+          <div className="w-full max-w-2xl flex flex-col gap-3">
+            {/* Modal Top Bar */}
+            <div className="flex items-center justify-between text-white px-1">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="p-2 rounded-full bg-[#1ed760]/20 text-[#1ed760]">
+                  <Video className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-bold text-sm sm:text-base truncate">{currentTrack.title}</h3>
+                  <p className="text-xs text-[#b3b3b3] truncate">{currentTrack.artist} • Official Music Video</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={`https://www.youtube.com/watch?v=${currentTrack.youtubeId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1 rounded-full bg-[#282828] hover:bg-[#333] text-xs font-medium text-white flex items-center gap-1.5 transition border border-white/10"
+                  title="Watch directly on YouTube"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-[#1ed760]" />
+                  <span className="hidden sm:inline">YouTube</span>
+                </a>
+                <button
+                  onClick={() => setShowVideoMode(false)}
+                  className="p-2 rounded-full bg-[#282828] hover:bg-[#383838] text-white transition active:scale-95 cursor-pointer"
+                  title="Close Video"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* 16:9 Video Player Container */}
+            <div className="relative w-full aspect-video rounded-2xl overflow-hidden shadow-2xl border border-white/20 bg-black">
+              <iframe
+                ref={modalVideoIframeRef}
+                key={`modal-video-${currentTrack.youtubeId}`}
+                src={`https://www.youtube-nocookie.com/embed/${currentTrack.youtubeId}?autoplay=1&enablejsapi=1&playsinline=1&rel=0&modestbranding=1&controls=1&start=${Math.floor(currentTime)}&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
+                title={currentTrack.title}
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allowFullScreen
+                className="w-full h-full"
+              />
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-between text-[11px] text-[#b3b3b3] px-1">
+              <span>HD Video with sound • Closing resumes background music</span>
+              <a
+                href={`https://www.youtube.com/watch?v=${currentTrack.youtubeId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[#1ed760] hover:underline flex items-center gap-1"
               >
-                <ChevronDown className="w-4 h-4" />
-              </button>
-            )}
+                Open on YouTube <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
           </div>
         </div>
       )}
@@ -2048,12 +2360,13 @@ export default function StealthMusicPlayer({
           {backgroundVideoEnabled && isPlaying && currentTrack?.youtubeId && (
             <div className="absolute inset-0 overflow-hidden pointer-events-none z-0 opacity-15">
               <iframe
-                src={`https://www.youtube.com/embed/${currentTrack.youtubeId}?autoplay=1&mute=1&controls=0&showinfo=0&loop=1&playlist=${currentTrack.youtubeId}&playsinline=1&modestbranding=1&rel=0`}
+                src={`https://www.youtube-nocookie.com/embed/${currentTrack.youtubeId}?autoplay=1&mute=1&controls=0&showinfo=0&loop=1&playlist=${currentTrack.youtubeId}&playsinline=1&modestbranding=1&rel=0`}
                 title="Ambient Video Background"
                 className="w-[140%] h-[140%] -translate-x-[20%] -translate-y-[20%] object-cover filter blur-3xl scale-125 pointer-events-none"
                 tabIndex="-1"
                 aria-hidden="true"
-                referrerPolicy="no-referrer-when-downgrade"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                referrerPolicy="strict-origin-when-cross-origin"
               />
               <div className="absolute inset-0 bg-gradient-to-b from-[#121212]/90 via-[#121212]/80 to-[#121212]" />
             </div>
@@ -2340,14 +2653,14 @@ export default function StealthMusicPlayer({
               )}
 
 
-              {currentTrack.isYoutube && (
+              {(currentTrack.youtubeId || currentTrack.isYoutube) && (
                 <button
                   onClick={() => setShowVideoMode(!showVideoMode)}
                   className={`p-1.5 sm:p-2 rounded-full border transition active:scale-90 shrink-0 ${
                     showVideoMode ? 'bg-[#1ed760] border-[#1ed760] text-black' : 'bg-[#242424] border-transparent text-white hover:bg-[#2a2a2a]'
                   }`}
-                  title="Toggle YouTube Video View"
-                  aria-label="Toggle YouTube Video View"
+                  title="Watch Music Video"
+                  aria-label="Watch Music Video"
                 >
                   <Video className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 </button>
@@ -3462,12 +3775,13 @@ export default function StealthMusicPlayer({
           {backgroundVideoEnabled && currentTrack.youtubeId && (
             <div className="absolute inset-0 overflow-hidden pointer-events-none -z-10 opacity-30">
               <iframe
-                src={`https://www.youtube.com/embed/${currentTrack.youtubeId}?autoplay=1&mute=1&controls=0&showinfo=0&loop=1&playlist=${currentTrack.youtubeId}&playsinline=1&modestbranding=1&rel=0`}
+                src={`https://www.youtube-nocookie.com/embed/${currentTrack.youtubeId}?autoplay=1&mute=1&controls=0&showinfo=0&loop=1&playlist=${currentTrack.youtubeId}&playsinline=1&modestbranding=1&rel=0`}
                 title="Ambient Video Background"
                 className="w-[160%] h-[160%] -translate-x-[30%] -translate-y-[30%] object-cover filter blur-3xl scale-125 pointer-events-none"
                 tabIndex="-1"
                 aria-hidden="true"
-                referrerPolicy="no-referrer-when-downgrade"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                referrerPolicy="strict-origin-when-cross-origin"
               />
               <div className="absolute inset-0 bg-gradient-to-b from-[#121212]/80 via-[#121212]/85 to-[#121212]" />
             </div>
@@ -3507,13 +3821,13 @@ export default function StealthMusicPlayer({
                 </button>
               )}
 
-              {currentTrack.isYoutube && (
+              {(currentTrack.youtubeId || currentTrack.isYoutube) && (
                 <button
                   onClick={() => setShowVideoMode(!showVideoMode)}
                   className={`p-2 rounded-full border transition active:scale-90 ${
                     showVideoMode ? 'bg-[#1ed760] border-[#1ed760] text-black' : 'bg-[#282828] border-transparent text-[#b3b3b3] hover:text-white'
                   }`}
-                  title="Toggle YouTube Video View"
+                  title="Watch Music Video"
                 >
                   <Video className="w-4 h-4" />
                 </button>
@@ -3563,7 +3877,10 @@ export default function StealthMusicPlayer({
               {canvasMode === 'canvas' ? (
                 currentTrack.isYoutube ? (
                   // YouTube full-video stream is rendered via persistent iframe positioned above
-                  <div className="relative w-64 h-64 sm:w-72 sm:h-72 rounded-2xl overflow-hidden shadow-2xl border border-white/20 bg-black flex items-center justify-center">
+                  <div 
+                    ref={canvasSlotRef}
+                    className="relative w-64 h-64 sm:w-72 sm:h-72 rounded-2xl overflow-hidden shadow-2xl border border-white/20 bg-black flex items-center justify-center"
+                  >
                     <img 
                       src={currentTrack.artwork} 
                       alt={currentTrack.title}
@@ -3578,16 +3895,31 @@ export default function StealthMusicPlayer({
                   // JioSaavn / Audio stream + Silent High-Res Spotify Looping Canvas
                   <div className="relative w-64 h-64 sm:w-72 sm:h-72 rounded-2xl overflow-hidden shadow-2xl border border-white/20 bg-black group-hover:scale-[1.02] transition-transform duration-300">
                     <iframe
-                      src={`https://www.youtube.com/embed/${currentTrack.youtubeId}?autoplay=1&mute=1&controls=0&loop=1&playlist=${currentTrack.youtubeId}&playsinline=1&modestbranding=1&rel=0`}
+                      ref={canvasIframeRef}
+                      key={`canvas-${currentTrack.youtubeId}`}
+                      src={`https://www.youtube-nocookie.com/embed/${currentTrack.youtubeId}?autoplay=${isPlaying ? 1 : 0}&mute=1&controls=0&loop=1&playlist=${currentTrack.youtubeId}&playsinline=1&modestbranding=1&rel=0&enablejsapi=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`}
                       title="Spotify Looping Video Canvas"
                       className="w-full h-full object-cover scale-110 pointer-events-none"
-                      referrerPolicy="no-referrer-when-downgrade"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      referrerPolicy="strict-origin-when-cross-origin"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent pointer-events-none" />
                     <div className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-md text-[9px] font-bold text-[#1ed760] uppercase tracking-wider flex items-center gap-1 pointer-events-none">
                       <span className="w-1.5 h-1.5 rounded-full bg-[#1ed760] animate-ping" />
                       <span>Canvas Video</span>
                     </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowVideoMode(true);
+                      }}
+                      className="absolute top-2.5 right-2.5 p-1.5 rounded-full bg-black/70 hover:bg-black text-white hover:text-[#1ed760] transition shadow-lg z-20 cursor-pointer"
+                      title="Watch Full Video"
+                      aria-label="Watch Full Video"
+                    >
+                      <Maximize2 className="w-4 h-4" />
+                    </button>
                   </div>
                 ) : (
                   // Audio track with canvas match on demand
