@@ -10,6 +10,11 @@ export default function InstallAppModal({ isOpen, onClose, onInstalled }) {
       if (typeof window === 'undefined') return false;
       return (
         localStorage.getItem('secret_bubble_app_installed') === 'true' ||
+        localStorage.getItem('secret_bubble_apk_downloaded') === 'true' ||
+        Boolean(window.Capacitor?.isNativePlatform?.()) ||
+        Boolean(window.Capacitor) ||
+        window.location?.protocol === 'capacitor:' ||
+        (window.location?.hostname === 'localhost' && !window.location?.port && !window.location?.host?.includes(':')) ||
         (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
         (window.matchMedia && window.matchMedia('(display-mode: minimal-ui)').matches) ||
         (window.matchMedia && window.matchMedia('(display-mode: fullscreen)').matches) ||
@@ -26,6 +31,11 @@ export default function InstallAppModal({ isOpen, onClose, onInstalled }) {
     try {
       const standalone =
         localStorage.getItem('secret_bubble_app_installed') === 'true' ||
+        localStorage.getItem('secret_bubble_apk_downloaded') === 'true' ||
+        Boolean(window.Capacitor?.isNativePlatform?.()) ||
+        Boolean(window.Capacitor) ||
+        window.location?.protocol === 'capacitor:' ||
+        (window.location?.hostname === 'localhost' && !window.location?.port && !window.location?.host?.includes(':')) ||
         (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
         (window.matchMedia && window.matchMedia('(display-mode: minimal-ui)').matches) ||
         (window.matchMedia && window.matchMedia('(display-mode: fullscreen)').matches) ||
@@ -34,6 +44,9 @@ export default function InstallAppModal({ isOpen, onClose, onInstalled }) {
 
       if (standalone) {
         setIsInstalled(true);
+        try {
+          localStorage.setItem('secret_bubble_app_installed', 'true');
+        } catch {}
         return;
       }
     } catch {}
@@ -75,9 +88,13 @@ export default function InstallAppModal({ isOpen, onClose, onInstalled }) {
   const markAlreadyInstalled = () => {
     try {
       localStorage.setItem('secret_bubble_app_installed', 'true');
+      localStorage.setItem('secret_bubble_apk_downloaded', 'true');
       localStorage.setItem('secret_bubble_install_dismissed', 'true');
     } catch {}
     setIsInstalled(true);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('secret_bubble_installed'));
+    }
     if (onInstalled) onInstalled();
     if (onClose) onClose();
   };
@@ -219,6 +236,7 @@ export default function InstallAppModal({ isOpen, onClose, onInstalled }) {
             <a
               href="https://github.com/codex-priyanshu/secret-bubble/releases/download/v1.0.0/Secret-Bubble.apk"
               download="Secret-Bubble.apk"
+              onClick={() => markAlreadyInstalled()}
               className="w-full py-3 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-500 hover:from-emerald-500 hover:to-cyan-400 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-xl shadow-emerald-600/30 transition active:scale-95 cursor-pointer"
             >
               <Download className="w-4 h-4" />
