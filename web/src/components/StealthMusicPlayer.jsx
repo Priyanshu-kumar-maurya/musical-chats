@@ -6,7 +6,7 @@ import {
   HardDrive, Smartphone, Music2, Plus, Search, 
   Globe, Flame, ExternalLink, Loader2, Video, Eye, EyeOff,
   Headphones, ChevronDown, ChevronUp, RadioTower, KeyRound, AlertCircle, Download,
-  ListMusic, ArrowLeft, Trash2, User, Maximize2
+  ListMusic, ArrowLeft, Trash2, User, Maximize2, RefreshCw
 } from 'lucide-react';
 
 const FEATURED_ONLINE_TRACKS = [
@@ -208,6 +208,17 @@ const FEATURED_ONLINE_TRACKS = [
   }
 ];
 
+// Personalized Vibe & Genre Filter Chips
+const VIBE_CHIPS = [
+  { id: 'for_you', label: 'For You', emoji: '✨' },
+  { id: 'hindi', label: 'Hindi Hits', emoji: '🎵' },
+  { id: 'bollywood', label: 'Bollywood', emoji: '🌟' },
+  { id: 'punjabi', label: 'Punjabi', emoji: '🔥' },
+  { id: 'english', label: 'English & Pop', emoji: '🌍' },
+  { id: 'lofi', label: 'Lofi & Chill', emoji: '☕' },
+  { id: 'romantic', label: 'Romantic', emoji: '❤️' }
+];
+
 // Continuous procedural fallback pool to guarantee non-stop songs even if offline
 const BACKUP_STREAM_POOL = [
   {
@@ -396,13 +407,15 @@ export default function StealthMusicPlayer({
   const [tracks, setTracks] = useState(() => {
     try {
       const rawTrack = localStorage.getItem('secret_bubble_last_track');
+      // Mix featured tracks with a randomized procedural batch so songs are fresh & rotating on every launch
+      const pool = [...FEATURED_ONLINE_TRACKS, ...BACKUP_STREAM_POOL];
+      const randomized = [...pool].sort(() => Math.random() - 0.5);
       if (rawTrack) {
         const parsed = JSON.parse(rawTrack);
-        const idx = FEATURED_ONLINE_TRACKS.findIndex(t => t.id === parsed.id);
-        if (idx === -1) {
-          return [parsed, ...FEATURED_ONLINE_TRACKS];
-        }
+        const filtered = randomized.filter(t => t.id !== parsed.id);
+        return [parsed, ...filtered];
       }
+      return randomized;
     } catch {}
     return FEATURED_ONLINE_TRACKS;
   });
@@ -411,10 +424,7 @@ export default function StealthMusicPlayer({
     try {
       const rawTrack = localStorage.getItem('secret_bubble_last_track');
       if (rawTrack) {
-        const parsed = JSON.parse(rawTrack);
-        const idx = FEATURED_ONLINE_TRACKS.findIndex(t => t.id === parsed.id);
-        if (idx !== -1) return idx;
-        return 0;
+        return 0; // Last played track restored at top index
       }
     } catch {}
     return 0;
@@ -449,6 +459,25 @@ export default function StealthMusicPlayer({
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const sentinelRef = useRef(null);
   const listScrollRef = useRef(null);
+
+  // YouTube Playlist Import States
+  const [showImportYoutubeModal, setShowImportYoutubeModal] = useState(false);
+  const [youtubePlaylistInput, setYoutubePlaylistInput] = useState('');
+  const [isImportingYoutube, setIsImportingYoutube] = useState(false);
+  const [importYoutubeError, setImportYoutubeError] = useState('');
+  const [importYoutubeSuccess, setImportYoutubeSuccess] = useState('');
+
+  // Learned User Tastes & Dynamic Genre Feed States
+  const [userTastes, setUserTastes] = useState(() => {
+    try {
+      const saved = localStorage.getItem('secret_bubble_user_tastes');
+      return saved ? JSON.parse(saved) : { hindi: 5, bollywood: 5, punjabi: 3, english: 2, lofi: 2, romantic: 4 };
+    } catch {
+      return { hindi: 5, bollywood: 5, punjabi: 3, english: 2, lofi: 2, romantic: 4 };
+    }
+  });
+  const [selectedGenre, setSelectedGenre] = useState('for_you'); // 'for_you' | 'hindi' | 'bollywood' | 'punjabi' | 'english' | 'lofi' | 'romantic'
+  const [isFeedRefreshing, setIsFeedRefreshing] = useState(false);
 
   // Playlist Management States
   const [customPlaylists, setCustomPlaylists] = useState(() => {
@@ -1125,9 +1154,39 @@ export default function StealthMusicPlayer({
     return 'https://secret-bubble-backend.onrender.com';
   }, [backendUrl]);
 
+  // Learn user preferences dynamically from playback
+  const recordTrackTaste = useCallback((track) => {
+    if (!track) return;
+    const text = `${track.title || ''} ${track.artist || ''} ${track.album || ''}`.toLowerCase();
+    setUserTastes(prev => {
+      const next = { ...prev };
+      if (text.includes('arijit') || text.includes('pritam') || text.includes('shreya') || text.includes('hindi') || text.includes('bollywood') || text.includes('sonu') || text.includes('kk')) {
+        next.hindi = (next.hindi || 0) + 1;
+        next.bollywood = (next.bollywood || 0) + 1;
+      }
+      if (text.includes('diljit') || text.includes('sidhu') || text.includes('punjabi') || text.includes('dhillon') || text.includes('aujla') || text.includes('badshah') || text.includes('shubh')) {
+        next.punjabi = (next.punjabi || 0) + 1;
+      }
+      if (text.includes('ed sheeran') || text.includes('taylor') || text.includes('pop') || text.includes('english') || text.includes('weeknd') || text.includes('dua') || text.includes('fonsi') || text.includes('charlie')) {
+        next.english = (next.english || 0) + 1;
+      }
+      if (text.includes('lofi') || text.includes('chill') || text.includes('slowed') || text.includes('relax') || text.includes('sleep') || text.includes('midnight')) {
+        next.lofi = (next.lofi || 0) + 1;
+      }
+      if (text.includes('romantic') || text.includes('love') || text.includes('tum') || text.includes('dil') || text.includes('ishq') || text.includes('hawaale') || text.includes('shayad')) {
+        next.romantic = (next.romantic || 0) + 1;
+      }
+      try {
+        localStorage.setItem('secret_bubble_user_tastes', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }, []);
+
   // Log music play activity to local counters and backend admin telemetry
   const logMusicTelemetry = useCallback((track) => {
     if (!track) return;
+    recordTrackTaste(track);
     try {
       const cur = parseInt(localStorage.getItem('secret_bubble_music_play_count') || '0', 10);
       localStorage.setItem('secret_bubble_music_play_count', String(cur + 1));
@@ -1873,6 +1932,120 @@ export default function StealthMusicPlayer({
     setIsPlaying(true);
   };
 
+  // Handle YouTube Playlist Import
+  const handleImportYoutubePlaylist = async (e) => {
+    e.preventDefault();
+    const input = youtubePlaylistInput.trim();
+    if (!input) return;
+
+    setIsImportingYoutube(true);
+    setImportYoutubeError('');
+    setImportYoutubeSuccess('');
+
+    try {
+      const apiBase = getBackendApiUrl();
+      const res = await fetch(`${apiBase}/api/music/youtube-playlist?url=${encodeURIComponent(input)}`);
+      const data = await res.json();
+
+      if (!res.ok || !data.success || !Array.isArray(data.tracks) || data.tracks.length === 0) {
+        throw new Error(data.message || 'Could not find playable songs in this playlist. Please ensure the link is public or unlisted.');
+      }
+
+      const newPl = {
+        id: `yt-pl-${Date.now()}`,
+        title: data.title || 'YouTube Playlist',
+        description: `Imported YouTube playlist (${data.tracks.length} tracks)`,
+        cover: data.cover || data.tracks[0]?.artwork || 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80',
+        gradient: 'from-red-600 via-rose-600 to-amber-600',
+        badge: 'YouTube',
+        isCustom: true,
+        isYoutubePlaylist: true,
+        youtubePlaylistId: data.playlistId,
+        createdAt: Date.now(),
+        songs: data.tracks
+      };
+
+      const updated = [newPl, ...customPlaylists];
+      saveCustomPlaylists(updated);
+      setImportYoutubeSuccess(`Successfully imported ${data.tracks.length} tracks!`);
+
+      setTimeout(() => {
+        setShowImportYoutubeModal(false);
+        setYoutubePlaylistInput('');
+        setImportYoutubeSuccess('');
+        setSelectedPlaylistView(newPl);
+        setActiveTab('playlists');
+      }, 900);
+    } catch (err) {
+      setImportYoutubeError(err.message || 'Failed to import playlist. Please check the URL and try again.');
+    } finally {
+      setIsImportingYoutube(false);
+    }
+  };
+
+  // Dynamic Fresh Feed loader for genres / for you
+  const fetchDynamicFeed = useCallback(async (genre = selectedGenre, replace = false) => {
+    setIsFeedRefreshing(true);
+    try {
+      let effectiveGenre = genre;
+      if (genre === 'for_you') {
+        const sorted = Object.entries(userTastes).sort((a, b) => b[1] - a[1]);
+        effectiveGenre = sorted[0]?.[0] || 'all';
+      }
+
+      const apiBase = getBackendApiUrl();
+      const res = await fetch(`${apiBase}/api/music/feed?genre=${encodeURIComponent(effectiveGenre)}&page=1`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.results) && data.results.length > 0) {
+          const fresh = data.results.map((item, idx) => ({
+            id: item.id || `track-feed-${Date.now()}-${idx}`,
+            title: item.title,
+            artist: item.artist,
+            album: item.album || "Online Stream",
+            duration: item.duration || 240,
+            durationText: item.durationText || "4:00",
+            artwork: item.artwork || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
+            url: item.url || null,
+            youtubeId: item.youtubeId || null,
+            isAudioStream: Boolean(item.url),
+            isYoutube: !item.url && Boolean(item.youtubeId),
+            color: "from-purple-950/60 via-slate-950 to-slate-950"
+          }));
+
+          setTracks(prev => {
+            if (replace) {
+              return fresh;
+            }
+            const existingIds = new Set(prev.map(t => t.id));
+            const newOnly = fresh.filter(t => !existingIds.has(t.id));
+            return newOnly.length > 0 ? [...newOnly, ...prev] : prev;
+          });
+          setFeedPage(1);
+        }
+      }
+    } catch (e) {
+      if (replace) {
+        const pool = [...FEATURED_ONLINE_TRACKS, ...BACKUP_STREAM_POOL];
+        const shuffled = [...pool].sort(() => Math.random() - 0.5);
+        setTracks(shuffled);
+      }
+    } finally {
+      setIsFeedRefreshing(false);
+    }
+  }, [selectedGenre, userTastes, getBackendApiUrl]);
+
+  // Handle genre filter chip click
+  const handleGenreChange = (genreId) => {
+    setSelectedGenre(genreId);
+    fetchDynamicFeed(genreId, true);
+  };
+
+  // Fetch dynamic personalized feed on initial app load
+  useEffect(() => {
+    fetchDynamicFeed('for_you', false);
+  }, []);
+
   // Infinite Non-Stop Music Loading (scrolling adds new hits continuously)
   const isLoadingRef = useRef(false);
 
@@ -1881,39 +2054,21 @@ export default function StealthMusicPlayer({
     isLoadingRef.current = true;
     setIsLoadingMore(true);
 
-    const TOPICS = [
-      'Arijit Singh Hits',
-      'Sidhu Moose Wala',
-      'Pritam Melodies',
-      'Diljit Dosanjh Hits',
-      'Anirudh Ravichander',
-      'Atif Aslam Romantic',
-      'Lofi Hindi Chill',
-      'AP Dhillon Top',
-      'Shreya Ghoshal Hits',
-      'KK Evergreen Hits',
-      'Darshan Raval Hits',
-      'A.R. Rahman Classics',
-      'Badshah Party Hits',
-      'Jubin Nautiyal Hits',
-      'B Praak Emotional Hits',
-      'Sonu Nigam Romantic',
-      'Mohit Chauhan Melodies',
-      'Bollywood Top Romantic',
-      'Punjabi Hits'
-    ];
-
     try {
       const nextPage = feedPage + 1;
-      const topic = TOPICS[(nextPage - 1) % TOPICS.length];
+      let effectiveGenre = selectedGenre;
+      if (selectedGenre === 'for_you') {
+        const sorted = Object.entries(userTastes).sort((a, b) => b[1] - a[1]);
+        effectiveGenre = sorted[0]?.[0] || 'all';
+      }
+
       const apiBase = getBackendApiUrl();
       let newTracks = [];
 
-      // Try 1: Fetch via /api/music/search with topic (working on deployed Render backend!)
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 6000);
-        const res = await fetch(`${apiBase}/api/music/search?q=${encodeURIComponent(topic)}`, {
+        const res = await fetch(`${apiBase}/api/music/feed?genre=${encodeURIComponent(effectiveGenre)}&page=${nextPage}`, {
           signal: controller.signal
         });
         clearTimeout(timeoutId);
@@ -1921,7 +2076,7 @@ export default function StealthMusicPlayer({
           const data = await res.json();
           if (data?.success && Array.isArray(data.results) && data.results.length > 0) {
             newTracks = data.results.map((item, idx) => ({
-              id: item.id || `track-${topic.replace(/\s+/g, '')}-${nextPage}-${idx}`,
+              id: item.id || `track-more-${nextPage}-${idx}`,
               title: item.title,
               artist: item.artist,
               album: item.album || "Online Stream",
@@ -1964,7 +2119,7 @@ export default function StealthMusicPlayer({
       isLoadingRef.current = false;
       setIsLoadingMore(false);
     }
-  }, [feedPage, getBackendApiUrl]);
+  }, [feedPage, selectedGenre, userTastes, getBackendApiUrl]);
 
   // Observer to trigger autoload when scrolling near bottom of list container
   useEffect(() => {
@@ -2986,10 +3141,54 @@ export default function StealthMusicPlayer({
 
                 {/* Section: Today's Biggest Hits / All Songs Spotify Table */}
                 <div>
+                  {/* Genre & Taste Vibe Chips */}
+                  <div className="flex items-center gap-2 overflow-x-auto pb-2 mb-3 no-scrollbar select-none">
+                    {VIBE_CHIPS.map((chip) => {
+                      const isSelected = selectedGenre === chip.id;
+                      return (
+                        <button
+                          key={chip.id}
+                          onClick={() => handleGenreChange(chip.id)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all duration-200 cursor-pointer ${
+                            isSelected
+                              ? 'bg-white text-black shadow-md scale-[1.02]'
+                              : 'bg-[#242424] hover:bg-[#333] text-[#b3b3b3] hover:text-white'
+                          }`}
+                        >
+                          <span>{chip.emoji}</span>
+                          <span>{chip.label}</span>
+                        </button>
+                      );
+                    })}
+
+                    <button
+                      onClick={() => fetchDynamicFeed(selectedGenre, true)}
+                      disabled={isFeedRefreshing}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs bg-[#242424] hover:bg-[#333] text-[#b3b3b3] hover:text-[#1ed760] transition ml-auto shrink-0 disabled:opacity-50 cursor-pointer"
+                      title="Refresh feed with new songs"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isFeedRefreshing ? 'animate-spin text-[#1ed760]' : ''}`} />
+                      <span className="hidden sm:inline text-[11px]">Refresh</span>
+                    </button>
+                  </div>
+
                   <div className="flex items-center justify-between mb-3">
                     <div>
-                      <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">Today's Biggest Hits</h2>
-                      <p className="text-xs text-[#b3b3b3]">Endless non-stop streaming</p>
+                      <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                        <span>
+                          {selectedGenre === 'for_you' 
+                            ? 'Made For You' 
+                            : VIBE_CHIPS.find(c => c.id === selectedGenre)?.label || "Today's Biggest Hits"}
+                        </span>
+                        {isFeedRefreshing && (
+                          <Loader2 className="w-4 h-4 animate-spin text-[#1ed760]" />
+                        )}
+                      </h2>
+                      <p className="text-xs text-[#b3b3b3]">
+                        {selectedGenre === 'for_you'
+                          ? 'Personalized from your listening taste & fresh rotations'
+                          : `Endless fresh ${VIBE_CHIPS.find(c => c.id === selectedGenre)?.label || 'trending'} streaming`}
+                      </p>
                     </div>
                     <span className="text-xs text-[#b3b3b3] font-mono">{tracks.length} tracks</span>
                   </div>
@@ -3131,13 +3330,28 @@ export default function StealthMusicPlayer({
                         <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">Your Library</h1>
                         <p className="text-xs text-[#b3b3b3] mt-0.5">Playlists, collections & saved music</p>
                       </div>
-                      <button
-                        onClick={() => setShowCreatePlaylistModal(true)}
-                        className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-white hover:bg-slate-200 text-black font-bold text-xs shadow-md transition active:scale-95 cursor-pointer"
-                      >
-                        <Plus className="w-4 h-4" />
-                        <span>Create Playlist</span>
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            setYoutubePlaylistInput('');
+                            setImportYoutubeError('');
+                            setImportYoutubeSuccess('');
+                            setShowImportYoutubeModal(true);
+                          }}
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-md shadow-red-900/30 transition active:scale-95 cursor-pointer"
+                          title="Import YouTube or YouTube Music playlist"
+                        >
+                          <Video className="w-4 h-4" />
+                          <span>Import YouTube</span>
+                        </button>
+                        <button
+                          onClick={() => setShowCreatePlaylistModal(true)}
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-white hover:bg-slate-200 text-black font-bold text-xs shadow-md transition active:scale-95 cursor-pointer"
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>Create Playlist</span>
+                        </button>
+                      </div>
                     </div>
 
                     {/* Liked Songs Hero Banner */}
@@ -3231,7 +3445,16 @@ export default function StealthMusicPlayer({
                               className="bg-[#181818] hover:bg-[#282828] p-3 sm:p-3.5 rounded-lg transition-all duration-300 group cursor-pointer relative"
                             >
                               <div className="relative aspect-square w-full rounded-md overflow-hidden bg-[#242424] flex items-center justify-center text-[#b3b3b3] group-hover:text-[#1ed760] mb-2.5 shadow-inner">
-                                <ListMusic className="w-10 h-10" />
+                                {pl.cover ? (
+                                  <img src={pl.cover} alt={pl.title} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
+                                ) : (
+                                  <ListMusic className="w-10 h-10" />
+                                )}
+                                {pl.isYoutubePlaylist && (
+                                  <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-red-600/90 text-[9px] font-black text-white uppercase tracking-wider flex items-center gap-1 shadow">
+                                    <Video className="w-2.5 h-2.5" /> YT
+                                  </span>
+                                )}
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -3249,13 +3472,28 @@ export default function StealthMusicPlayer({
                           ))}
                         </div>
                       ) : (
-                        <div
-                          onClick={() => setShowCreatePlaylistModal(true)}
-                          className="p-8 rounded-xl border border-dashed border-[#3e3e3e] hover:border-[#1ed760] bg-[#181818]/60 text-center cursor-pointer transition group"
-                        >
-                          <Plus className="w-8 h-8 text-[#b3b3b3] group-hover:text-[#1ed760] mx-auto mb-2 transition" />
-                          <p className="text-sm font-bold text-white">Create your first playlist</p>
-                          <p className="text-xs text-[#b3b3b3] mt-1">It's easy, we'll help you collect your favorite songs.</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div
+                            onClick={() => setShowCreatePlaylistModal(true)}
+                            className="p-6 rounded-xl border border-dashed border-[#3e3e3e] hover:border-[#1ed760] bg-[#181818]/60 text-center cursor-pointer transition group"
+                          >
+                            <Plus className="w-7 h-7 text-[#b3b3b3] group-hover:text-[#1ed760] mx-auto mb-2 transition" />
+                            <p className="text-sm font-bold text-white">Create a playlist</p>
+                            <p className="text-xs text-[#b3b3b3] mt-1">Build your own custom playlist track by track.</p>
+                          </div>
+                          <div
+                            onClick={() => {
+                              setYoutubePlaylistInput('');
+                              setImportYoutubeError('');
+                              setImportYoutubeSuccess('');
+                              setShowImportYoutubeModal(true);
+                            }}
+                            className="p-6 rounded-xl border border-dashed border-red-900/60 hover:border-red-500 bg-[#181818]/60 text-center cursor-pointer transition group"
+                          >
+                            <Video className="w-7 h-7 text-red-500 mx-auto mb-2 transition group-hover:scale-110" />
+                            <p className="text-sm font-bold text-white">Import YouTube Playlist</p>
+                            <p className="text-xs text-[#b3b3b3] mt-1">Paste a link to import your favorite YouTube songs in seconds.</p>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -4300,6 +4538,96 @@ export default function StealthMusicPlayer({
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Import YouTube Playlist Modal */}
+      {showImportYoutubeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-[#282828] border border-[#3e3e3e] rounded-2xl p-6 shadow-2xl space-y-4 text-white">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-red-500 font-bold text-sm">
+                <Video className="w-5 h-5" />
+                <span>Import YouTube Playlist</span>
+              </div>
+              <button
+                onClick={() => {
+                  if (!isImportingYoutube) {
+                    setShowImportYoutubeModal(false);
+                    setImportYoutubeError('');
+                    setImportYoutubeSuccess('');
+                  }
+                }}
+                disabled={isImportingYoutube}
+                className="p-1 text-[#b3b3b3] hover:text-white rounded-lg hover:bg-[#333] transition disabled:opacity-50 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-[#b3b3b3] leading-relaxed">
+              Paste any public or unlisted YouTube or YouTube Music playlist link or ID. All songs will be imported into your library with audio streaming and Video Canvas.
+            </p>
+
+            <form onSubmit={handleImportYoutubePlaylist} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[#b3b3b3]">YouTube Playlist Link or ID</label>
+                <input
+                  type="text"
+                  required
+                  value={youtubePlaylistInput}
+                  onChange={(e) => setYoutubePlaylistInput(e.target.value)}
+                  placeholder="https://www.youtube.com/playlist?list=PL... or PL..."
+                  disabled={isImportingYoutube}
+                  className="w-full px-3.5 py-2.5 bg-[#181818] border border-[#3e3e3e] focus:border-red-500 rounded-xl text-xs text-white focus:outline-none transition disabled:opacity-50"
+                  autoFocus
+                />
+              </div>
+
+              {importYoutubeError && (
+                <div className="p-3 bg-red-950/50 border border-red-800/60 rounded-xl text-xs text-red-200 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
+                  <span>{importYoutubeError}</span>
+                </div>
+              )}
+
+              {importYoutubeSuccess && (
+                <div className="p-3 bg-emerald-950/50 border border-emerald-800/60 rounded-xl text-xs text-emerald-200 flex items-center gap-2">
+                  <Check className="w-4 h-4 shrink-0 text-[#1ed760]" />
+                  <span>{importYoutubeSuccess}</span>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowImportYoutubeModal(false);
+                    setImportYoutubeError('');
+                    setImportYoutubeSuccess('');
+                  }}
+                  disabled={isImportingYoutube}
+                  className="flex-1 py-2.5 bg-[#333] hover:bg-[#3e3e3e] text-white rounded-full text-xs font-bold transition disabled:opacity-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isImportingYoutube || !youtubePlaylistInput.trim()}
+                  className="flex-1 py-2.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-full text-xs font-bold transition shadow-lg shadow-red-900/30 flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  {isImportingYoutube ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Importing...</span>
+                    </>
+                  ) : (
+                    <span>Import & Save</span>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

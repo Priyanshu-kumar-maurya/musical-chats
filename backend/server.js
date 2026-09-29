@@ -1547,36 +1547,44 @@ app.get('/api/music/search', async (req, res) => {
 });
 
 // Endless Feed / Recommendations for Infinite Scrolling: Returns batches of popular streaming tracks by page
-const FEED_TOPICS = [
-  'Trending Hindi Hits',
-  'Arijit Singh Best',
-  'Sidhu Moose Wala Top',
-  'Bollywood Romantic Hits',
-  'Diljit Dosanjh Hits',
-  'Pritam Blockbusters',
-  'Anirudh Ravichander Viral',
-  'Shreya Ghoshal Hits',
-  'Atif Aslam Melody',
-  'Lofi Hindi Chill',
-  'Punjabi Party Bangers',
-  'Darshan Raval Hits',
-  'KK Evergreen Hits',
-  'Mohit Chauhan Melodies',
-  'Sonu Nigam Romantic',
-  'Jubin Nautiyal Hits',
-  'B Praak Emotional Hits',
-  'A.R. Rahman Classics',
-  'Bollywood 2000s Nostalgia',
-  'Badshah Party Hits',
-  'King Rap Hits',
-  'Honey Singh Hits',
-  'Sachet Tandon & Parampara',
-  'Armaan Malik Melodies'
-];
+// Dynamic Genre Feed Topics for Diverse Recommendations
+const GENRE_FEED_TOPICS = {
+  all: [
+    'Trending Hindi Hits 2026', 'Arijit Singh Best', 'Latest Punjabi Bangers 2026',
+    'Bollywood Romantic Hits', 'Diljit Dosanjh Top', 'Global English Pop Hits',
+    'Lofi Hindi Chill', 'Pritam Blockbusters', 'Anirudh Ravichander Hits'
+  ],
+  hindi: [
+    'Latest Bollywood 2026', 'Arijit Singh Best', 'Pritam Melodies',
+    'Shreya Ghoshal Hits', 'KK Evergreen Hits', 'Mohit Chauhan Melodies',
+    'Sonu Nigam Romantic', 'Jubin Nautiyal Hits', 'B Praak Hits', 'A.R. Rahman Classics'
+  ],
+  bollywood: [
+    'Bollywood Blockbusters 2026', 'Bollywood Romantic Hits', 'Trending Bollywood Songs',
+    'Pritam Hits', 'Arijit Singh Bollywood', 'A.R. Rahman Classics', 'Karan Johar Hits'
+  ],
+  punjabi: [
+    'Latest Punjabi Hits 2026', 'Sidhu Moose Wala Top', 'Diljit Dosanjh Hits',
+    'Karan Aujla Bangers', 'AP Dhillon Hits', 'Shubh Punjabi Pop', 'Badshah Hits'
+  ],
+  english: [
+    'Top English Hits 2026', 'Global Pop Hits', 'Billboard Hot 100',
+    'Ed Sheeran Hits', 'Taylor Swift Pop', 'Dua Lipa Hits', 'The Weeknd'
+  ],
+  lofi: [
+    'Lofi Hindi Chill', 'Midnight Chill Beats', 'Slowed and Reverb Hindi', 'Lofi Acoustic Study', 'Late Night Beats'
+  ],
+  romantic: [
+    'Bollywood Romantic Hits', 'Arijit Singh Love Songs', 'Heartfelt Hindi Melodies',
+    'Atif Aslam Romantic', 'Romantic Acoustic Love'
+  ]
+};
 
 app.get('/api/music/feed', async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-  const topic = FEED_TOPICS[(page - 1) % FEED_TOPICS.length];
+  const genre = (req.query.genre || 'all').trim().toLowerCase();
+  const topics = GENRE_FEED_TOPICS[genre] || GENRE_FEED_TOPICS.all;
+  const topic = topics[(page - 1) % topics.length];
 
   try {
     const searchUrl = `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_marker=0&query=${encodeURIComponent(topic)}&ctx=android&_format=json`;
@@ -1624,6 +1632,7 @@ app.get('/api/music/feed', async (req, res) => {
     return res.json({
       success: true,
       page,
+      genre,
       topic,
       results,
       hasMore: true
@@ -1812,6 +1821,171 @@ app.get('/api/music/youtube-search', async (req, res) => {
   } catch (err) {
     console.error('YouTube search error:', err);
     res.json({ success: false, results: [], message: err.message });
+  }
+});
+
+// Import Complete YouTube Playlist (by URL or playlist ID)
+app.get('/api/music/youtube-playlist', async (req, res) => {
+  const input = (req.query.url || req.query.list || req.query.id || '').trim();
+  if (!input) {
+    return res.status(400).json({ success: false, message: 'YouTube playlist URL or ID is required' });
+  }
+
+  // Extract playlist ID
+  let listId = input;
+  const urlMatch = input.match(/[?&]list=([a-zA-Z0-9_-]+)/);
+  if (urlMatch) {
+    listId = urlMatch[1];
+  } else if (input.startsWith('http')) {
+    const lastPart = input.split('/').pop().split('?')[0];
+    if (lastPart) listId = lastPart;
+  }
+
+  try {
+    const browseId = listId.startsWith('VL') ? listId : `VL${listId}`;
+    const ytRes = await fetch('https://www.youtube.com/youtubei/v1/browse?prettyPrint=false', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
+      },
+      body: JSON.stringify({
+        context: { client: { clientName: 'WEB', clientVersion: '2.20240315.00.00', hl: 'en', gl: 'US' } },
+        browseId: browseId
+      })
+    });
+
+    const data = await ytRes.json();
+    const title = data.header?.pageHeaderRenderer?.pageTitle ||
+                  data.header?.playlistHeaderRenderer?.title?.simpleText ||
+                  data.header?.playlistHeaderRenderer?.title?.runs?.[0]?.text ||
+                  data.metadata?.playlistMetadataRenderer?.title ||
+                  data.microformat?.microformatDataRenderer?.title ||
+                  'Imported YouTube Playlist';
+
+    let tracks = [];
+    const seenIds = new Set();
+
+    function scan(obj) {
+      if (!obj || typeof obj !== 'object') return;
+
+      // 1. Modern lockupViewModel
+      if (obj.lockupViewModel && obj.lockupViewModel.contentId) {
+        const vm = obj.lockupViewModel;
+        const vId = vm.contentId;
+        if (!seenIds.has(vId)) {
+          seenIds.add(vId);
+          const meta = vm.metadata?.lockupMetadataViewModel;
+          const songTitle = meta?.title?.content || 'YouTube Track';
+          const artist = meta?.metadata?.contentMetadataViewModel?.metadataRows?.[0]?.metadataParts?.[0]?.text?.content || 'YouTube Music';
+          const thumbs = vm.contentImage?.thumbnailViewModel?.image?.sources || [];
+          const thumb = thumbs[thumbs.length - 1]?.url || `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`;
+
+          tracks.push({
+            id: `yt-${vId}`,
+            youtubeId: vId,
+            title: songTitle,
+            artist: artist,
+            album: title,
+            duration: 240,
+            durationText: '4:00',
+            artwork: thumb,
+            isYoutube: true
+          });
+        }
+        return;
+      }
+
+      // 2. Classic playlistVideoRenderer
+      if (obj.playlistVideoRenderer && obj.playlistVideoRenderer.videoId) {
+        const pvr = obj.playlistVideoRenderer;
+        const vId = pvr.videoId;
+        if (!seenIds.has(vId)) {
+          seenIds.add(vId);
+          const songTitle = pvr.title?.runs?.[0]?.text || pvr.title?.simpleText || 'YouTube Track';
+          const artist = pvr.shortBylineText?.runs?.[0]?.text || 'YouTube Music';
+          const thumbs = pvr.thumbnail?.thumbnails || [];
+          const thumb = thumbs[thumbs.length - 1]?.url || `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`;
+          const dur = parseInt(pvr.lengthSeconds || '240', 10);
+
+          tracks.push({
+            id: `yt-${vId}`,
+            youtubeId: vId,
+            title: songTitle,
+            artist: artist,
+            album: title,
+            duration: dur,
+            durationText: pvr.lengthText?.simpleText || `${Math.floor(dur / 60)}:${dur % 60 < 10 ? '0' : ''}${dur % 60}`,
+            artwork: thumb,
+            isYoutube: true
+          });
+        }
+        return;
+      }
+
+      // 3. Panel renderer
+      if (obj.playlistPanelVideoRenderer && obj.playlistPanelVideoRenderer.videoId) {
+        const pvr = obj.playlistPanelVideoRenderer;
+        const vId = pvr.videoId;
+        if (!seenIds.has(vId)) {
+          seenIds.add(vId);
+          const songTitle = pvr.title?.simpleText || pvr.title?.runs?.[0]?.text || 'YouTube Track';
+          const artist = pvr.shortBylineText?.runs?.[0]?.text || pvr.shortBylineText?.simpleText || 'YouTube Music';
+          const thumbs = pvr.thumbnail?.thumbnails || [];
+          const thumb = thumbs[thumbs.length - 1]?.url || `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`;
+
+          tracks.push({
+            id: `yt-${vId}`,
+            youtubeId: vId,
+            title: songTitle,
+            artist: artist,
+            album: title,
+            duration: 240,
+            durationText: pvr.lengthText?.simpleText || '4:00',
+            artwork: thumb,
+            isYoutube: true
+          });
+        }
+        return;
+      }
+
+      for (const k of Object.keys(obj)) {
+        scan(obj[k]);
+      }
+    }
+
+    scan(data);
+
+    // Fallback: If Innertube returns 0 items, scrape watch page
+    if (tracks.length === 0) {
+      const watchUrl = `https://www.youtube.com/watch?v=${listId.replace(/^[A-Z_]+/, '')}&list=${listId}`;
+      const pageRes = await fetch(watchUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+          'Accept-Language': 'en-US,en;q=0.9'
+        }
+      });
+      const html = await pageRes.text();
+      const match = html.match(/(?:var\s+)?ytInitialData\s*=\s*({.+?});/);
+      if (match) {
+        const watchData = JSON.parse(match[1]);
+        scan(watchData);
+      }
+    }
+
+    const cover = tracks[0]?.artwork || 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=500&q=80';
+
+    return res.json({
+      success: true,
+      playlistId: listId,
+      title,
+      cover,
+      songCount: tracks.length,
+      tracks
+    });
+  } catch (err) {
+    console.error('YouTube playlist error:', err);
+    return res.status(500).json({ success: false, message: err.message, tracks: [] });
   }
 });
 
