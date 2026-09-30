@@ -6,7 +6,7 @@ import {
   HardDrive, Smartphone, Music2, Plus, Search, 
   Globe, Flame, ExternalLink, Loader2, Video, Eye, EyeOff,
   Headphones, ChevronDown, ChevronUp, RadioTower, KeyRound, AlertCircle, Download,
-  ListMusic, ArrowLeft, Trash2, User, Maximize2, RefreshCw
+  ListMusic, ArrowLeft, Trash2, User, Maximize2, RefreshCw, History, Clock
 } from 'lucide-react';
 
 const FEATURED_ONLINE_TRACKS = [
@@ -510,6 +510,46 @@ export default function StealthMusicPlayer({
   const [newPlaylistDesc, setNewPlaylistDesc] = useState('');
   const [addToPlaylistTrack, setAddToPlaylistTrack] = useState(null); // track object to add to playlist
 
+  // Listening History state (Recently Played)
+  const [listeningHistory, setListeningHistory] = useState(() => {
+    try {
+      const saved = localStorage.getItem('secret_bubble_listening_history');
+      if (saved) return JSON.parse(saved);
+      const lastTrackStr = localStorage.getItem('secret_bubble_last_track');
+      if (lastTrackStr) {
+        const last = JSON.parse(lastTrackStr);
+        if (last && last.title) return [{ ...last, playedAt: Date.now() }];
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  });
+
+  const recordTrackToHistory = useCallback((track) => {
+    if (!track || !track.title) return;
+    setListeningHistory(prev => {
+      const filtered = prev.filter(t => (t.id ? t.id !== track.id : t.title !== track.title));
+      const entry = {
+        ...track,
+        playedAt: Date.now()
+      };
+      const nextHistory = [entry, ...filtered].slice(0, 100);
+      try {
+        localStorage.setItem('secret_bubble_listening_history', JSON.stringify(nextHistory));
+      } catch {}
+      return nextHistory;
+    });
+  }, []);
+
+  const clearListeningHistory = useCallback(() => {
+    setListeningHistory([]);
+    try {
+      localStorage.removeItem('secret_bubble_listening_history');
+    } catch {}
+    setSelectedPlaylistView(prev => prev?.id === 'pl-history' ? { ...prev, songs: [] } : prev);
+  }, []);
+
   // Online Search states
   const [activeTab, setActiveTab] = useState('playlist'); // 'playlist' | 'playlists' | 'search' | 'trending' | 'phone'
   const [searchQuery, setSearchQuery] = useState('');
@@ -761,6 +801,13 @@ export default function StealthMusicPlayer({
       localStorage.setItem('secret_bubble_last_track', JSON.stringify(currentTrack));
     } catch {}
   }, [currentTrack]);
+
+  // Record playing track to listening history
+  useEffect(() => {
+    if (isPlaying && currentTrack) {
+      recordTrackToHistory(currentTrack);
+    }
+  }, [isPlaying, currentTrack, recordTrackToHistory]);
 
   // Persist playback timestamp periodically
   useEffect(() => {
@@ -1187,6 +1234,7 @@ export default function StealthMusicPlayer({
   const logMusicTelemetry = useCallback((track) => {
     if (!track) return;
     recordTrackTaste(track);
+    recordTrackToHistory(track);
     try {
       const cur = parseInt(localStorage.getItem('secret_bubble_music_play_count') || '0', 10);
       localStorage.setItem('secret_bubble_music_play_count', String(cur + 1));
@@ -1215,7 +1263,7 @@ export default function StealthMusicPlayer({
         }).catch(() => {});
       }
     } catch (e) {}
-  }, [getBackendApiUrl]);
+  }, [getBackendApiUrl, recordTrackTaste, recordTrackToHistory]);
 
   // Ping active presence so even non-streaming visitors are recorded
   useEffect(() => {
@@ -1915,6 +1963,9 @@ export default function StealthMusicPlayer({
         }
       }
       return likedList;
+    }
+    if (playlist.id === 'pl-history') {
+      return listeningHistory || [];
     }
     if (playlist.isCustom) {
       return playlist.songs || [];
@@ -2890,6 +2941,26 @@ export default function StealthMusicPlayer({
             </button>
 
             <button
+              onClick={() => {
+                setSelectedPlaylistView({
+                  id: 'pl-history',
+                  title: 'Listening History',
+                  description: 'All tracks you recently listened to',
+                  cover: listeningHistory[0]?.artwork || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
+                  gradient: 'from-violet-600 via-indigo-900 to-[#181818]',
+                  badge: 'History',
+                  isHistoryCollection: true,
+                  songs: listeningHistory
+                });
+                setActiveTab('playlists');
+              }}
+              className="px-3.5 py-1.5 rounded-full text-xs transition cursor-pointer font-semibold whitespace-nowrap bg-[#242424] text-white hover:bg-[#2a2a2a] flex items-center gap-1.5"
+            >
+              <History className="w-3 h-3 text-violet-400" />
+              <span>History ({listeningHistory.length})</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('trending')}
               className={`px-3.5 py-1.5 rounded-full text-xs transition cursor-pointer font-semibold whitespace-nowrap ${
                 activeTab === 'trending'
@@ -3061,8 +3132,40 @@ export default function StealthMusicPlayer({
                       </button>
                     </div>
 
-                    {/* Quick Cards 2-5: Curated Playlists */}
-                    {CURATED_PLAYLISTS.slice(0, 5).map((pl) => (
+                    {/* Quick Card 2: Listening History */}
+                    <div
+                      onClick={() => {
+                        setSelectedPlaylistView({
+                          id: 'pl-history',
+                          title: 'Listening History',
+                          description: 'All tracks you recently listened to',
+                          cover: listeningHistory[0]?.artwork || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
+                          gradient: 'from-violet-600 via-indigo-900 to-[#181818]',
+                          badge: 'History',
+                          isHistoryCollection: true,
+                          songs: listeningHistory
+                        });
+                        setActiveTab('playlists');
+                      }}
+                      className="group flex items-center bg-[#282828]/60 hover:bg-[#282828] rounded-[4px] overflow-hidden transition duration-200 cursor-pointer shadow-sm relative pr-2"
+                    >
+                      <div className="w-12 h-12 sm:w-16 sm:h-16 bg-gradient-to-tr from-violet-600 to-indigo-950 flex items-center justify-center text-white shrink-0 shadow">
+                        <History className="w-6 h-6 text-violet-200" />
+                      </div>
+                      <span className="font-bold text-[11px] sm:text-xs md:text-sm text-white px-2.5 sm:px-3 line-clamp-2 leading-tight flex-1">Listening History</span>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          playPlaylistAll({ id: 'pl-history', songs: listeningHistory });
+                        }}
+                        className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-[#1ed760] text-black shadow-xl flex items-center justify-center opacity-0 group-hover:opacity-100 group-hover:scale-105 transition-all duration-200 shrink-0"
+                      >
+                        <Play className="w-4 h-4 fill-current ml-0.5" />
+                      </button>
+                    </div>
+
+                    {/* Quick Cards 3-6: Curated Playlists */}
+                    {CURATED_PLAYLISTS.slice(0, 4).map((pl) => (
                       <div
                         key={pl.id}
                         onClick={() => {
@@ -3138,6 +3241,66 @@ export default function StealthMusicPlayer({
                     ))}
                   </div>
                 </div>
+
+                {/* Section: Recently Played (Listening History) */}
+                {listeningHistory.length > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <History className="w-5 h-5 text-violet-400" />
+                        <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">Recently Played</h2>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          setSelectedPlaylistView({
+                            id: 'pl-history',
+                            title: 'Listening History',
+                            description: 'All tracks you recently listened to',
+                            cover: listeningHistory[0]?.artwork || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
+                            gradient: 'from-violet-600 via-indigo-900 to-[#181818]',
+                            badge: 'History',
+                            isHistoryCollection: true,
+                            songs: listeningHistory
+                          });
+                          setActiveTab('playlists');
+                        }}
+                        className="text-xs text-[#b3b3b3] hover:text-white font-bold hover:underline cursor-pointer"
+                      >
+                        Show all ({listeningHistory.length})
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 sm:gap-4">
+                      {listeningHistory.slice(0, 5).map((track, idx) => (
+                        <div
+                          key={track.id || idx}
+                          onClick={() => playTrackNow(track)}
+                          className="bg-[#181818] hover:bg-[#282828] p-3 sm:p-3.5 rounded-lg transition-all duration-300 group cursor-pointer relative"
+                        >
+                          <div className="relative aspect-square w-full rounded-md overflow-hidden shadow-lg mb-2.5 bg-[#282828]">
+                            <img
+                              src={track.artwork || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80'}
+                              alt={track.title}
+                              className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                            />
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                playTrackNow(track);
+                              }}
+                              className="absolute bottom-2 right-2 w-10 h-10 rounded-full bg-[#1ed760] text-black shadow-2xl flex items-center justify-center opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 hover:scale-105 transition-all duration-200"
+                              title="Play Track"
+                            >
+                              <Play className="w-4 h-4 fill-current ml-0.5" />
+                            </button>
+                          </div>
+                          <p className="font-bold text-xs sm:text-sm text-white truncate group-hover:text-[#1ed760] transition">{track.title}</p>
+                          <p className="text-[11px] text-[#b3b3b3] line-clamp-1 mt-0.5">{track.artist}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Section: Today's Biggest Hits / All Songs Spotify Table */}
                 <div>
@@ -3354,37 +3517,78 @@ export default function StealthMusicPlayer({
                       </div>
                     </div>
 
-                    {/* Liked Songs Hero Banner */}
-                    <div
-                      onClick={() => {
-                        const likedSongsList = getPlaylistSongs({ id: 'pl-liked' });
-                        setSelectedPlaylistView({
-                          id: 'pl-liked',
-                          title: 'Liked Songs',
-                          description: 'All your favorite favorited tracks',
-                          cover: 'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=500&q=80',
-                          gradient: 'from-[#1ed760] to-emerald-950',
-                          badge: 'Favorites',
-                          isLikedCollection: true,
-                          songs: likedSongsList
-                        });
-                      }}
-                      className="p-5 sm:p-6 rounded-lg bg-gradient-to-br from-[#1ed760] via-emerald-800 to-[#181818] transition cursor-pointer flex flex-col justify-between group shadow-xl active:scale-[0.99] min-h-[140px] relative overflow-hidden"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-full bg-black/30 flex items-center justify-center text-white shrink-0">
-                          <Heart className="w-6 h-6 fill-white" />
+                    {/* Hero Collections Grid: Liked Songs & Listening History */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Liked Songs Hero Banner */}
+                      <div
+                        onClick={() => {
+                          const likedSongsList = getPlaylistSongs({ id: 'pl-liked' });
+                          setSelectedPlaylistView({
+                            id: 'pl-liked',
+                            title: 'Liked Songs',
+                            description: 'All your favorite favorited tracks',
+                            cover: 'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=500&q=80',
+                            gradient: 'from-[#1ed760] to-emerald-950',
+                            badge: 'Favorites',
+                            isLikedCollection: true,
+                            songs: likedSongsList
+                          });
+                        }}
+                        className="p-5 sm:p-6 rounded-xl bg-gradient-to-br from-[#1ed760] via-emerald-800 to-[#181818] transition cursor-pointer flex flex-col justify-between group shadow-xl active:scale-[0.99] min-h-[140px] relative overflow-hidden"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-full bg-black/30 flex items-center justify-center text-white shrink-0">
+                            <Heart className="w-6 h-6 fill-white" />
+                          </div>
+                          <div>
+                            <p className="text-lg sm:text-xl font-extrabold text-white">Liked Songs</p>
+                            <p className="text-xs text-white/80">{likedSongIds.length} liked songs</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-lg sm:text-xl font-extrabold text-white">Liked Songs</p>
-                          <p className="text-xs text-white/80">{likedSongIds.length} liked songs</p>
+
+                        <div className="flex items-center justify-between pt-4">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-white/70">Automatic Collection</span>
+                          <div className="w-11 h-11 rounded-full bg-black text-[#1ed760] flex items-center justify-center shadow-xl group-hover:scale-105 transition">
+                            <Play className="w-5 h-5 fill-current ml-0.5" />
+                          </div>
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between pt-4">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-white/70">Automatic Collection</span>
-                        <div className="w-11 h-11 rounded-full bg-black text-[#1ed760] flex items-center justify-center shadow-xl group-hover:scale-105 transition">
-                          <Play className="w-5 h-5 fill-current ml-0.5" />
+                      {/* Listening History Hero Banner */}
+                      <div
+                        onClick={() => {
+                          setSelectedPlaylistView({
+                            id: 'pl-history',
+                            title: 'Listening History',
+                            description: 'All tracks you recently listened to',
+                            cover: listeningHistory[0]?.artwork || 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80',
+                            gradient: 'from-violet-600 via-indigo-900 to-[#181818]',
+                            badge: 'History',
+                            isHistoryCollection: true,
+                            songs: listeningHistory
+                          });
+                        }}
+                        className="p-5 sm:p-6 rounded-xl bg-gradient-to-br from-violet-600 via-indigo-900 to-[#181818] transition cursor-pointer flex flex-col justify-between group shadow-xl active:scale-[0.99] min-h-[140px] relative overflow-hidden"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-full bg-black/30 flex items-center justify-center text-white shrink-0">
+                            <History className="w-6 h-6 text-violet-300" />
+                          </div>
+                          <div>
+                            <p className="text-lg sm:text-xl font-extrabold text-white">Listening History</p>
+                            <p className="text-xs text-white/80">
+                              {listeningHistory.length > 0 
+                                ? `${listeningHistory.length} recently played tracks` 
+                                : 'No tracks played yet'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-4">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-white/70">Recently Played</span>
+                          <div className="w-11 h-11 rounded-full bg-black text-violet-400 flex items-center justify-center shadow-xl group-hover:scale-105 transition">
+                            <Play className="w-5 h-5 fill-current ml-0.5" />
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -3552,6 +3756,17 @@ export default function StealthMusicPlayer({
                           <Trash2 className="w-5 h-5" />
                         </button>
                       )}
+
+                      {selectedPlaylistView.id === 'pl-history' && (
+                        <button
+                          onClick={clearListeningHistory}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[#b3b3b3] hover:text-rose-400 hover:bg-[#282828] rounded-full transition cursor-pointer border border-[#3e3e3e]"
+                          title="Clear Listening History"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Clear History</span>
+                        </button>
+                      )}
                     </div>
 
                     {/* Tracklist Inside Playlist */}
@@ -3608,6 +3823,17 @@ export default function StealthMusicPlayer({
                                   <X className="w-3.5 h-3.5" />
                                 </button>
                               )}
+                              {selectedPlaylistView.id === 'pl-history' && track.playedAt && (
+                                <span className="text-[10px] text-violet-400 font-medium whitespace-nowrap">
+                                  {Math.floor((Date.now() - track.playedAt) / 1000) < 60
+                                    ? 'Just now'
+                                    : Math.floor((Date.now() - track.playedAt) / 60000) < 60
+                                    ? `${Math.floor((Date.now() - track.playedAt) / 60000)}m ago`
+                                    : Math.floor((Date.now() - track.playedAt) / 3600000) < 24
+                                    ? `${Math.floor((Date.now() - track.playedAt) / 3600000)}h ago`
+                                    : `${Math.floor((Date.now() - track.playedAt) / 86400000)}d ago`}
+                                </span>
+                              )}
                               <span className="font-mono text-[#b3b3b3]">
                                 {track.durationText || '3:30'}
                               </span>
@@ -3618,9 +3844,19 @@ export default function StealthMusicPlayer({
 
                       {getPlaylistSongs(selectedPlaylistView).length === 0 && (
                         <div className="text-center py-16 text-[#b3b3b3] text-xs">
-                          <ListMusic className="w-10 h-10 mx-auto mb-2 text-[#4d4d4d]" />
-                          <p className="font-bold text-white text-sm">It's a bit empty here</p>
-                          <p className="text-[#b3b3b3] mt-1">Search for songs or tap '+' in All Songs to add them to this playlist.</p>
+                          {selectedPlaylistView.id === 'pl-history' ? (
+                            <>
+                              <Clock className="w-10 h-10 mx-auto mb-2 text-[#4d4d4d]" />
+                              <p className="font-bold text-white text-sm">No listening history yet</p>
+                              <p className="text-[#b3b3b3] mt-1">Play any song and it will automatically appear here in your history.</p>
+                            </>
+                          ) : (
+                            <>
+                              <ListMusic className="w-10 h-10 mx-auto mb-2 text-[#4d4d4d]" />
+                              <p className="font-bold text-white text-sm">It's a bit empty here</p>
+                              <p className="text-[#b3b3b3] mt-1">Search for songs or tap '+' in All Songs to add them to this playlist.</p>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
