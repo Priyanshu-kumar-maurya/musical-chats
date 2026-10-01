@@ -556,6 +556,12 @@ export default function StealthMusicPlayer({
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
   const [searchError, setSearchError] = useState('');
+  const [searchPage, setSearchPage] = useState(1);
+  const [isSearchingMore, setIsSearchingMore] = useState(false);
+  const [hasMoreSearch, setHasMoreSearch] = useState(true);
+  const searchSentinelRef = useRef(null);
+  const activeSearchQueryRef = useRef('');
+  const isSearchingMoreRef = useRef(false);
 
   // Live Autocomplete & Typing Suggestions States
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -1559,6 +1565,7 @@ export default function StealthMusicPlayer({
     if (searchTerm !== undefined) {
       setSearchQuery(searchTerm);
     }
+    activeSearchQueryRef.current = query;
 
     // Switch view to Search tab immediately
     setActiveTab('search');
@@ -1567,6 +1574,8 @@ export default function StealthMusicPlayer({
     setShowSuggestions(false);
     setSearchError('');
     setSearchResults([]);
+    setSearchPage(1);
+    setHasMoreSearch(true);
 
     // 1. Check if direct YouTube URL was pasted
     const ytId = extractYouTubeId(query);
@@ -1588,6 +1597,7 @@ export default function StealthMusicPlayer({
         };
         playTrackNow(ytTrack);
         setIsSearching(false);
+        setHasMoreSearch(false);
         return;
       } catch (err) {
         const ytTrack = {
@@ -1604,6 +1614,7 @@ export default function StealthMusicPlayer({
         };
         playTrackNow(ytTrack);
         setIsSearching(false);
+        setHasMoreSearch(false);
         return;
       }
     }
@@ -1615,7 +1626,7 @@ export default function StealthMusicPlayer({
     const candidateEndpoints = [];
     const localBase = getBackendApiUrl();
     if (localBase) {
-      candidateEndpoints.push(`${localBase}/api/music/search?q=${encodeURIComponent(query)}`);
+      candidateEndpoints.push(`${localBase}/api/music/search?q=${encodeURIComponent(query)}&page=1`);
     }
     const isCapacitor = typeof window !== 'undefined' && (
       Boolean(window.Capacitor?.isNativePlatform?.()) ||
@@ -1624,12 +1635,14 @@ export default function StealthMusicPlayer({
       (window.location?.hostname === 'localhost' && !window.location?.port)
     );
     if (!isCapacitor) {
-      candidateEndpoints.push(`/api/music/search?q=${encodeURIComponent(query)}`);
+      candidateEndpoints.push(`/api/music/search?q=${encodeURIComponent(query)}&page=1`);
     }
-    const defaultCloud = `https://secret-bubble-backend.onrender.com/api/music/search?q=${encodeURIComponent(query)}`;
+    const defaultCloud = `https://secret-bubble-backend.onrender.com/api/music/search?q=${encodeURIComponent(query)}&page=1`;
     if (!candidateEndpoints.includes(defaultCloud)) {
       candidateEndpoints.push(defaultCloud);
     }
+
+    let serverHasMore = true;
 
     for (const url of candidateEndpoints) {
       try {
@@ -1661,6 +1674,9 @@ export default function StealthMusicPlayer({
                 color: "from-purple-950/50 via-slate-950 to-slate-950"
               });
             });
+            if (data.hasMore === false || data.results.length < 10) {
+              serverHasMore = false;
+            }
             break; // Got valid results from online backend
           }
         }
@@ -1709,6 +1725,7 @@ export default function StealthMusicPlayer({
                   color: "from-red-950/50 via-slate-950 to-slate-950"
                 });
               });
+              serverHasMore = false;
               break;
             }
           }
@@ -1741,11 +1758,106 @@ export default function StealthMusicPlayer({
 
     if (fullSongResults.length > 0) {
       setSearchResults(fullSongResults);
+      setHasMoreSearch(serverHasMore);
     } else {
       setSearchError(`No songs found for "${query}". Try searching for Arijit Singh, Sidhu Moose Wala, Kesariya, or another artist.`);
+      setHasMoreSearch(false);
     }
     setIsSearching(false);
   };
+
+  // Continuous Infinite Scrolling for Search Results
+  const loadMoreSearchResults = useCallback(async () => {
+    const q = (activeSearchQueryRef.current || searchQuery).trim();
+    if (!q || isSearching || isSearchingMoreRef.current || !hasMoreSearch) return;
+
+    isSearchingMoreRef.current = true;
+    setIsSearchingMore(true);
+
+    try {
+      const nextPage = searchPage + 1;
+      const localBase = getBackendApiUrl();
+      const candidateEndpoints = [];
+      if (localBase) {
+        candidateEndpoints.push(`${localBase}/api/music/search?q=${encodeURIComponent(q)}&page=${nextPage}`);
+      }
+      const isCapacitor = typeof window !== 'undefined' && (
+        Boolean(window.Capacitor?.isNativePlatform?.()) ||
+        Boolean(window.Capacitor) ||
+        window.location?.protocol === 'capacitor:' ||
+        (window.location?.hostname === 'localhost' && !window.location?.port)
+      );
+      if (!isCapacitor) {
+        candidateEndpoints.push(`/api/music/search?q=${encodeURIComponent(q)}&page=${nextPage}`);
+      }
+      candidateEndpoints.push(`https://secret-bubble-backend.onrender.com/api/music/search?q=${encodeURIComponent(q)}&page=${nextPage}`);
+
+      let newItems = [];
+      let serverHasMore = true;
+
+      for (const url of candidateEndpoints) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 7000);
+          const res = await fetch(url, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.success && Array.isArray(data.results)) {
+              if (data.results.length > 0) {
+                newItems = data.results.map(item => {
+                  const releaseYear = item.year || parseInt(item.releaseDate?.slice(0, 4), 10) || 0;
+                  return {
+                    id: item.id || `track-${item.youtubeId || Math.random()}`,
+                    title: item.title,
+                    artist: item.artist,
+                    album: item.album || "Full Song",
+                    duration: item.duration || 240,
+                    durationText: item.durationText || "Full Song",
+                    artwork: item.artwork,
+                    url: item.url || null,
+                    youtubeId: item.youtubeId || null,
+                    year: releaseYear || undefined,
+                    releaseDate: item.releaseDate || null,
+                    publishedTime: item.publishedTime || null,
+                    recencyScore: item.recencyScore || (releaseYear ? (5000 + (releaseYear - 2000) * 100) : 500),
+                    isAudioStream: Boolean(item.url),
+                    isYoutube: !item.url && Boolean(item.youtubeId),
+                    color: "from-purple-950/50 via-slate-950 to-slate-950"
+                  };
+                });
+                if (data.hasMore === false || data.results.length < 10) {
+                  serverHasMore = false;
+                }
+                break;
+              } else {
+                serverHasMore = false;
+                break;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      if (newItems.length > 0) {
+        setSearchResults(prev => {
+          const seen = new Set(prev.map(s => s.id));
+          const filtered = newItems.filter(s => !seen.has(s.id));
+          return filtered.length > 0 ? [...prev, ...filtered] : prev;
+        });
+        setSearchPage(nextPage);
+        setHasMoreSearch(serverHasMore);
+      } else {
+        setHasMoreSearch(false);
+      }
+    } catch (err) {
+      console.error('Error loading more search songs:', err);
+      setHasMoreSearch(false);
+    } finally {
+      isSearchingMoreRef.current = false;
+      setIsSearchingMore(false);
+    }
+  }, [searchQuery, isSearching, hasMoreSearch, searchPage, getBackendApiUrl]);
 
   const handleSearchSubmit = (e) => {
     e?.preventDefault();
@@ -2045,7 +2157,7 @@ export default function StealthMusicPlayer({
       }
 
       const apiBase = getBackendApiUrl();
-      const res = await fetch(`${apiBase}/api/music/feed?genre=${encodeURIComponent(effectiveGenre)}&page=1`);
+      const res = await fetch(`${apiBase}/api/music/feed?genre=${encodeURIComponent(effectiveGenre)}&page=1&fresh=1`);
       if (res.ok) {
         const data = await res.json();
         if (data.success && Array.isArray(data.results) && data.results.length > 0) {
@@ -2072,6 +2184,9 @@ export default function StealthMusicPlayer({
             const newOnly = fresh.filter(t => !existingIds.has(t.id));
             return newOnly.length > 0 ? [...newOnly, ...prev] : prev;
           });
+          if (replace) {
+            setCurrentTrackIndex(0);
+          }
           setFeedPage(1);
         }
       }
@@ -2092,10 +2207,27 @@ export default function StealthMusicPlayer({
     fetchDynamicFeed(genreId, true);
   };
 
-  // Fetch dynamic personalized feed on initial app load
+  // Fetch dynamic fresh personalized feed on every initial app launch (YouTube-style fresh feed)
   useEffect(() => {
-    fetchDynamicFeed('for_you', false);
+    fetchDynamicFeed('for_you', true);
   }, []);
+
+  // YouTube-style: when user re-opens / refocuses app after being away, refresh to fresh rotating songs
+  useEffect(() => {
+    let lastHiddenTime = 0;
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        lastHiddenTime = Date.now();
+      } else if (document.visibilityState === 'visible') {
+        // If away for more than 5 minutes and not actively playing, refresh to fresh rotating tracks
+        if (lastHiddenTime > 0 && Date.now() - lastHiddenTime > 5 * 60 * 1000 && !isPlaying) {
+          fetchDynamicFeed(selectedGenre, true);
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [selectedGenre, isPlaying, fetchDynamicFeed]);
 
   // Infinite Non-Stop Music Loading (scrolling adds new hits continuously)
   const isLoadingRef = useRef(false);
@@ -2172,25 +2304,28 @@ export default function StealthMusicPlayer({
     }
   }, [feedPage, selectedGenre, userTastes, getBackendApiUrl]);
 
-  // Observer to trigger autoload when scrolling near bottom of list container
+  // Observer to trigger autoload when scrolling near bottom of list container (for both Home Feed & Search results)
   useEffect(() => {
-    if (activeTab !== 'playlist') return;
     const scrollContainer = listScrollRef.current;
     if (!scrollContainer) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting) {
-          loadMoreSongs();
+          if (activeTab === 'playlist') {
+            loadMoreSongs();
+          } else if (activeTab === 'search') {
+            loadMoreSearchResults();
+          }
         }
       },
       {
         root: scrollContainer,
-        rootMargin: '250px'
+        rootMargin: '300px'
       }
     );
 
-    const currentSentinel = sentinelRef.current;
+    const currentSentinel = (activeTab === 'search') ? searchSentinelRef.current : sentinelRef.current;
     if (currentSentinel) {
       observer.observe(currentSentinel);
     }
@@ -2200,13 +2335,17 @@ export default function StealthMusicPlayer({
         observer.unobserve(currentSentinel);
       }
     };
-  }, [activeTab, loadMoreSongs]);
+  }, [activeTab, loadMoreSongs, loadMoreSearchResults]);
 
   // Secondary rock-solid scroll handler for mobile webview
   const handleContainerScroll = (e) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-    if (scrollHeight - scrollTop - clientHeight < 280 && activeTab === 'playlist') {
-      loadMoreSongs();
+    if (scrollHeight - scrollTop - clientHeight < 320) {
+      if (activeTab === 'playlist') {
+        loadMoreSongs();
+      } else if (activeTab === 'search') {
+        loadMoreSearchResults();
+      }
     }
   };
 
@@ -3967,6 +4106,24 @@ export default function StealthMusicPlayer({
                       </div>
                     </div>
                   ))}
+
+                  {/* Infinite Scroll Sentinel for Search */}
+                  {searchResults.length > 0 && (
+                    <div ref={searchSentinelRef} className="h-6 w-full" />
+                  )}
+
+                  {/* Infinite Loading More Indicator for Search */}
+                  {isSearchingMore && (
+                    <div className="flex items-center justify-center py-6 gap-2 text-xs text-[#b3b3b3] bg-[#181818]/40 rounded-xl my-2 border border-white/5">
+                      <Loader2 className="w-4 h-4 text-[#1ed760] animate-spin" />
+                      <span className="font-semibold text-white">Loading more songs...</span>
+                    </div>
+                  )}
+
+                  {/* End of Search Results Notice */}
+                  {!hasMoreSearch && searchResults.length > 15 && !isSearching && !isSearchingMore && (
+                    <p className="text-center text-[11px] text-[#727272] py-4 font-medium">All matching songs loaded</p>
+                  )}
 
                   {searchResults.length === 0 && !isSearching && !searchError && (
                     <div className="text-center py-16 text-[#b3b3b3] text-xs bg-[#181818]/40 rounded-xl border border-white/5">

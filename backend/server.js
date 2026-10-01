@@ -1474,49 +1474,49 @@ app.get('/api/music/suggestions', async (req, res) => {
   }
 });
 
-// Unified Audio Search: Returns direct audio streams for continuous background playback
+// Unified Audio Search: Returns direct audio streams for continuous background playback with pagination
 app.get('/api/music/search', async (req, res) => {
   const q = (req.query.q || '').trim();
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(30, Math.max(10, parseInt(req.query.limit, 10) || 25));
+
   if (!q) {
-    return res.json({ success: true, results: [] });
+    return res.json({ success: true, page, total: 0, results: [], hasMore: false });
   }
 
   try {
-    const searchUrl = `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_marker=0&query=${encodeURIComponent(q)}&ctx=android&_format=json`;
+    // 1. Primary: JioSaavn real paged search API (returns 25 high-quality tracks with direct media URLs)
+    const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(q)}&p=${page}&n=${limit}&ctx=android&_format=json`;
     const saavnRes = await fetch(searchUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
     });
     const data = await saavnRes.json();
-    const songs = data.songs?.data || [];
-
+    const songs = data.results || [];
+    const totalResults = parseInt(data.total, 10) || 0;
     const results = [];
 
     if (songs.length > 0) {
-      const pids = songs.slice(0, 15).map(s => s.id).join(',');
-      const detailsUrl = `https://www.jiosaavn.com/api.php?__call=song.getDetails&cc=in&_marker=0%3F_marker%3D0&_format=json&pids=${pids}`;
-      const detRes = await fetch(detailsUrl);
-      const detData = await detRes.json();
-
-      for (const s of songs.slice(0, 15)) {
-        const details = detData[s.id];
-        if (details && details.encrypted_media_url) {
-          const directAudio = decryptSaavnUrl(details.encrypted_media_url);
+      for (const s of songs) {
+        if (s.encrypted_media_url) {
+          const directAudio = decryptSaavnUrl(s.encrypted_media_url);
           if (directAudio) {
-            const dur = parseInt(details.duration, 10) || 240;
+            const dur = parseInt(s.duration, 10) || 240;
             const min = Math.floor(dur / 60);
             const sec = dur % 60;
-            const img = (details.image || s.image || '')
+            const img = (s.image || '')
               .replace('50x50.jpg', '500x500.jpg')
-              .replace('150x150.jpg', '500x500.jpg');
+              .replace('150x150.jpg', '500x500.jpg')
+              .replace('50x50.webp', '500x500.webp')
+              .replace('150x150.webp', '500x500.webp');
 
-            const releaseYear = parseInt(details.year || s.more_info?.year || s.year, 10) || 0;
-            const releaseDate = details.release_date || s.more_info?.release_date || '';
+            const releaseYear = parseInt(s.year || s.more_info?.year, 10) || 0;
+            const releaseDate = s.release_date || s.more_info?.release_date || '';
 
             results.push({
               id: `track-${s.id}`,
-              title: cleanHtml(details.song || s.title),
-              artist: cleanHtml(details.primary_artists || s.more_info?.primary_artists || 'Online Music'),
-              album: cleanHtml(details.album || s.album || 'Online Album'),
+              title: cleanHtml(s.song || s.title),
+              artist: cleanHtml(s.primary_artists || s.singers || s.more_info?.primary_artists || 'Online Music'),
+              album: cleanHtml(s.album || 'Online Album'),
               duration: dur,
               durationText: `${min}:${sec < 10 ? '0' : ''}${sec}`,
               artwork: img,
@@ -1528,21 +1528,85 @@ app.get('/api/music/search', async (req, res) => {
           }
         }
       }
-
-      // Sort by newest release year first, followed by older songs
-      results.sort((a, b) => (b.year || 0) - (a.year || 0));
     }
 
-    // If direct audio search yielded results, return immediately
+    // 2. If search.getResults returned playable audio tracks, return them immediately
     if (results.length > 0) {
-      return res.json({ success: true, results, source: 'direct-audio' });
+      const hasMore = totalResults ? (page * limit < totalResults) : (results.length >= limit);
+      return res.json({
+        success: true,
+        page,
+        total: totalResults || results.length,
+        results,
+        hasMore,
+        source: 'direct-audio'
+      });
     }
 
-    // Fallback to YouTube scraper if no direct audio was found
-    return res.redirect(`/api/music/youtube-search?q=${encodeURIComponent(q)}`);
+    // 3. Fallback on page 1 to autocomplete if search.getResults yielded nothing
+    if (page === 1) {
+      const autoUrl = `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_marker=0&query=${encodeURIComponent(q)}&ctx=android&_format=json`;
+      const autoRes = await fetch(autoUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+      });
+      const autoData = await autoRes.json();
+      const autoSongs = autoData.songs?.data || [];
+
+      if (autoSongs.length > 0) {
+        const pids = autoSongs.slice(0, 15).map(s => s.id).join(',');
+        const detailsUrl = `https://www.jiosaavn.com/api.php?__call=song.getDetails&cc=in&_marker=0%3F_marker%3D0&_format=json&pids=${pids}`;
+        const detRes = await fetch(detailsUrl);
+        const detData = await detRes.json();
+
+        for (const s of autoSongs.slice(0, 15)) {
+          const details = detData[s.id];
+          if (details && details.encrypted_media_url) {
+            const directAudio = decryptSaavnUrl(details.encrypted_media_url);
+            if (directAudio) {
+              const dur = parseInt(details.duration, 10) || 240;
+              const min = Math.floor(dur / 60);
+              const sec = dur % 60;
+              const img = (details.image || s.image || '')
+                .replace('50x50.jpg', '500x500.jpg')
+                .replace('150x150.jpg', '500x500.jpg');
+
+              const releaseYear = parseInt(details.year || s.more_info?.year || s.year, 10) || 0;
+              const releaseDate = details.release_date || s.more_info?.release_date || '';
+
+              results.push({
+                id: `track-${s.id}`,
+                title: cleanHtml(details.song || s.title),
+                artist: cleanHtml(details.primary_artists || s.more_info?.primary_artists || 'Online Music'),
+                album: cleanHtml(details.album || s.album || 'Online Album'),
+                duration: dur,
+                durationText: `${min}:${sec < 10 ? '0' : ''}${sec}`,
+                artwork: img,
+                url: directAudio,
+                year: releaseYear,
+                releaseDate,
+                isAudioStream: true
+              });
+            }
+          }
+        }
+      }
+
+      if (results.length > 0) {
+        return res.json({ success: true, page: 1, total: results.length, results, hasMore: false, source: 'autocomplete-fallback' });
+      }
+
+      // Fallback to YouTube scraper on page 1 if no direct audio was found
+      return res.redirect(`/api/music/youtube-search?q=${encodeURIComponent(q)}`);
+    }
+
+    // For page > 1 with no results, return clean empty list with hasMore: false
+    return res.json({ success: true, page, total: totalResults, results: [], hasMore: false });
   } catch (err) {
     console.error('Unified audio search error:', err);
-    return res.redirect(`/api/music/youtube-search?q=${encodeURIComponent(q)}`);
+    if (page === 1) {
+      return res.redirect(`/api/music/youtube-search?q=${encodeURIComponent(q)}`);
+    }
+    return res.json({ success: false, page, results: [], hasMore: false, error: err.message });
   }
 });
 
@@ -1552,31 +1616,38 @@ const GENRE_FEED_TOPICS = {
   all: [
     'Trending Hindi Hits 2026', 'Arijit Singh Best', 'Latest Punjabi Bangers 2026',
     'Bollywood Romantic Hits', 'Diljit Dosanjh Top', 'Global English Pop Hits',
-    'Lofi Hindi Chill', 'Pritam Blockbusters', 'Anirudh Ravichander Hits'
+    'Lofi Hindi Chill', 'Pritam Blockbusters', 'Anirudh Ravichander Hits',
+    'Shreya Ghoshal Hits', 'KK Evergreen Melodies', 'Atif Aslam Classics',
+    'Karan Aujla Hits', 'AP Dhillon Melodies', 'Sidhu Moose Wala Top'
   ],
   hindi: [
     'Latest Bollywood 2026', 'Arijit Singh Best', 'Pritam Melodies',
     'Shreya Ghoshal Hits', 'KK Evergreen Hits', 'Mohit Chauhan Melodies',
-    'Sonu Nigam Romantic', 'Jubin Nautiyal Hits', 'B Praak Hits', 'A.R. Rahman Classics'
+    'Sonu Nigam Romantic', 'Jubin Nautiyal Hits', 'B Praak Hits', 'A.R. Rahman Classics',
+    'Vishal Mishra Romantic', 'Darshan Raval Hits', 'Sachin-Jigar Hits'
   ],
   bollywood: [
     'Bollywood Blockbusters 2026', 'Bollywood Romantic Hits', 'Trending Bollywood Songs',
-    'Pritam Hits', 'Arijit Singh Bollywood', 'A.R. Rahman Classics', 'Karan Johar Hits'
+    'Pritam Hits', 'Arijit Singh Bollywood', 'A.R. Rahman Classics', 'Karan Johar Hits',
+    '90s Bollywood Evergreen', '2000s Bollywood Nostalgia', 'Yash Raj Films Hits'
   ],
   punjabi: [
     'Latest Punjabi Hits 2026', 'Sidhu Moose Wala Top', 'Diljit Dosanjh Hits',
-    'Karan Aujla Bangers', 'AP Dhillon Hits', 'Shubh Punjabi Pop', 'Badshah Hits'
+    'Karan Aujla Bangers', 'AP Dhillon Hits', 'Shubh Punjabi Pop', 'Badshah Hits',
+    'Amrit Maan Punjabi', 'Jordan Sandhu Hits', 'Honey Singh Party'
   ],
   english: [
     'Top English Hits 2026', 'Global Pop Hits', 'Billboard Hot 100',
-    'Ed Sheeran Hits', 'Taylor Swift Pop', 'Dua Lipa Hits', 'The Weeknd'
+    'Ed Sheeran Hits', 'Taylor Swift Pop', 'Dua Lipa Hits', 'The Weeknd',
+    'Post Malone Hits', 'Coldplay Anthems', 'Imagine Dragons Hits'
   ],
   lofi: [
-    'Lofi Hindi Chill', 'Midnight Chill Beats', 'Slowed and Reverb Hindi', 'Lofi Acoustic Study', 'Late Night Beats'
+    'Lofi Hindi Chill', 'Midnight Chill Beats', 'Slowed and Reverb Hindi', 'Lofi Acoustic Study', 'Late Night Beats',
+    'Rainy Day Hindi Lofi', 'Acoustic Bollywood Coffee'
   ],
   romantic: [
     'Bollywood Romantic Hits', 'Arijit Singh Love Songs', 'Heartfelt Hindi Melodies',
-    'Atif Aslam Romantic', 'Romantic Acoustic Love'
+    'Atif Aslam Romantic', 'Romantic Acoustic Love', 'Monsoon Love Songs Hindi', 'Soulful Hindi Melodies'
   ]
 };
 
@@ -1584,44 +1655,51 @@ app.get('/api/music/feed', async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const genre = (req.query.genre || 'all').trim().toLowerCase();
   const topics = GENRE_FEED_TOPICS[genre] || GENRE_FEED_TOPICS.all;
-  const topic = topics[(page - 1) % topics.length];
+
+  // YouTube-like Fresh Dynamic Feed:
+  // On page 1, pick a randomized seed topic so reopening or refreshing the app ALWAYS presents new, rotating songs!
+  const isFresh = req.query.fresh === 'true' || req.query.fresh === '1' || page === 1;
+  const seed = isFresh ? Math.floor(Math.random() * topics.length) : 0;
+  const topic = req.query.topic || topics[(seed + page - 1) % topics.length];
 
   try {
-    const searchUrl = `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_marker=0&query=${encodeURIComponent(topic)}&ctx=android&_format=json`;
+    // Use real paged search.getResults for 25 high-quality tracks with direct 320kbps streams
+    const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topic)}&p=1&n=25&ctx=android&_format=json`;
     const saavnRes = await fetch(searchUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
     });
     const data = await saavnRes.json();
-    const songs = data.songs?.data || [];
+    const songs = data.results || [];
     const results = [];
 
     if (songs.length > 0) {
-      const pids = songs.slice(0, 15).map(s => s.id).join(',');
-      const detailsUrl = `https://www.jiosaavn.com/api.php?__call=song.getDetails&cc=in&_marker=0%3F_marker%3D0&_format=json&pids=${pids}`;
-      const detRes = await fetch(detailsUrl);
-      const detData = await detRes.json();
-
-      for (const s of songs.slice(0, 15)) {
-        const details = detData[s.id];
-        if (details && details.encrypted_media_url) {
-          const directAudio = decryptSaavnUrl(details.encrypted_media_url);
+      for (const s of songs) {
+        if (s.encrypted_media_url) {
+          const directAudio = decryptSaavnUrl(s.encrypted_media_url);
           if (directAudio) {
-            const dur = parseInt(details.duration, 10) || 240;
+            const dur = parseInt(s.duration, 10) || 240;
             const min = Math.floor(dur / 60);
             const sec = dur % 60;
-            const img = (details.image || s.image || '')
+            const img = (s.image || '')
               .replace('50x50.jpg', '500x500.jpg')
-              .replace('150x150.jpg', '500x500.jpg');
+              .replace('150x150.jpg', '500x500.jpg')
+              .replace('50x50.webp', '500x500.webp')
+              .replace('150x150.webp', '500x500.webp');
+
+            const releaseYear = parseInt(s.year || s.more_info?.year, 10) || 0;
+            const releaseDate = s.release_date || s.more_info?.release_date || '';
 
             results.push({
               id: `track-${s.id}-${page}`,
-              title: cleanHtml(details.song || s.title),
-              artist: cleanHtml(details.primary_artists || s.more_info?.primary_artists || 'Online Music'),
-              album: cleanHtml(details.album || s.album || 'Online Album'),
+              title: cleanHtml(s.song || s.title),
+              artist: cleanHtml(s.primary_artists || s.singers || s.more_info?.primary_artists || 'Online Music'),
+              album: cleanHtml(s.album || 'Online Album'),
               duration: dur,
               durationText: `${min}:${sec < 10 ? '0' : ''}${sec}`,
               artwork: img,
               url: directAudio,
+              year: releaseYear,
+              releaseDate,
               isAudioStream: true
             });
           }
@@ -1629,12 +1707,15 @@ app.get('/api/music/feed', async (req, res) => {
       }
     }
 
+    // Shuffle fresh results slightly on page 1 so track order is varied
+    const finalResults = (page === 1) ? results.sort(() => Math.random() - 0.5) : results;
+
     return res.json({
       success: true,
       page,
       genre,
       topic,
-      results,
+      results: finalResults,
       hasMore: true
     });
   } catch (err) {
