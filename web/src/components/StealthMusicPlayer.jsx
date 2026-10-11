@@ -1097,13 +1097,17 @@ export default function StealthMusicPlayer({
     }
   }, [viewMode, canvasMode]);
 
-  // Synchronize play/pause with canvas iframe
+  // Synchronize play/pause with canvas iframe (strictly muted at all times)
   useEffect(() => {
     if (canvasIframeRef.current?.contentWindow) {
       try {
         const cmd = isPlaying ? 'playVideo' : 'pauseVideo';
         canvasIframeRef.current.contentWindow.postMessage(
           JSON.stringify({ event: 'command', func: cmd, args: [] }),
+          '*'
+        );
+        canvasIframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func: 'mute', args: [] }),
           '*'
         );
       } catch (e) {}
@@ -1145,6 +1149,18 @@ export default function StealthMusicPlayer({
     }
     const nextTrack = tracks[nextIndex] || tracks[0];
     if (nextTrack) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
+      if (iframeRef.current?.contentWindow) {
+        try {
+          iframeRef.current.contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+            '*'
+          );
+        } catch (e) {}
+      }
       currentTrackStartTimeRef.current = Date.now();
       hasLoggedListenRef.current = false;
       setCurrentTrack(nextTrack);
@@ -1164,6 +1180,18 @@ export default function StealthMusicPlayer({
     }
     const prevTrack = tracks[prevIndex] || tracks[0];
     if (prevTrack) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
+      if (iframeRef.current?.contentWindow) {
+        try {
+          iframeRef.current.contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+            '*'
+          );
+        } catch (e) {}
+      }
       currentTrackStartTimeRef.current = Date.now();
       hasLoggedListenRef.current = false;
       setCurrentTrack(prevTrack);
@@ -1639,7 +1667,7 @@ export default function StealthMusicPlayer({
     }
   }, [currentTrack, canvasMode, fetchVideoCanvasForTrack]);
 
-  // Handle Real Audio / YouTube Playback
+  // Handle Real Audio / YouTube Playback with Strict Mutual Exclusion
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -1656,9 +1684,32 @@ export default function StealthMusicPlayer({
       } else {
         audio.pause();
       }
+
+      // Hard-mute and pause any YouTube iframe stream so sounds NEVER overlap
+      if (iframeRef.current?.contentWindow) {
+        try {
+          iframeRef.current.contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+            '*'
+          );
+          iframeRef.current.contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func: 'mute', args: [] }),
+            '*'
+          );
+        } catch (e) {}
+      }
+      if (modalVideoIframeRef.current?.contentWindow) {
+        try {
+          modalVideoIframeRef.current.contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+            '*'
+          );
+        } catch (e) {}
+      }
     } else if (currentTrack?.isYoutube) {
-      // YouTube fallback mode: HTML5 audio pauses, iframe streams
+      // YouTube mode: HTML5 audio MUST be strictly paused and reset
       audio.pause();
+      audio.currentTime = 0;
       if (iframeRef.current?.contentWindow) {
         try {
           const cmd = isPlaying ? 'playVideo' : 'pauseVideo';
@@ -1666,6 +1717,17 @@ export default function StealthMusicPlayer({
             JSON.stringify({ event: 'command', func: cmd, args: [] }),
             '*'
           );
+          if (isMuted) {
+            iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'mute', args: [] }),
+              '*'
+            );
+          } else {
+            iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'unMute', args: [] }),
+              '*'
+            );
+          }
         } catch (e) {}
       }
     }
@@ -2197,8 +2259,23 @@ export default function StealthMusicPlayer({
 
   const playTrackNow = (track) => {
     if (!track) return;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+    if (iframeRef.current?.contentWindow) {
+      try {
+        iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+          '*'
+        );
+      } catch (e) {}
+    }
+    currentTrackStartTimeRef.current = Date.now();
+    hasLoggedListenRef.current = false;
     logMusicTelemetry(track);
     setCurrentTrack(track);
+    setCurrentTime(0);
     setTracks(prev => {
       const idx = prev.findIndex(t => t.id === track.id || (t.title === track.title && t.artist === track.artist));
       if (idx !== -1) return prev;
@@ -3124,12 +3201,12 @@ export default function StealthMusicPlayer({
           {backgroundVideoEnabled && isPlaying && currentTrack?.youtubeId && (
             <div className="absolute inset-0 overflow-hidden pointer-events-none z-0 opacity-15">
               <iframe
-                src={`https://www.youtube-nocookie.com/embed/${currentTrack.youtubeId}?autoplay=1&mute=1&controls=0&showinfo=0&loop=1&playlist=${currentTrack.youtubeId}&playsinline=1&modestbranding=1&rel=0`}
+                src={`https://www.youtube-nocookie.com/embed/${currentTrack.youtubeId}?autoplay=1&mute=1&volume=0&controls=0&showinfo=0&loop=1&playlist=${currentTrack.youtubeId}&playsinline=1&modestbranding=1&rel=0`}
                 title="Ambient Video Background"
                 className="w-[140%] h-[140%] -translate-x-[20%] -translate-y-[20%] object-cover filter blur-3xl scale-125 pointer-events-none"
                 tabIndex="-1"
                 aria-hidden="true"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allow="autoplay"
                 referrerPolicy="strict-origin-when-cross-origin"
               />
               <div className="absolute inset-0 bg-gradient-to-b from-[#121212]/90 via-[#121212]/80 to-[#121212]" />
@@ -4877,12 +4954,12 @@ export default function StealthMusicPlayer({
           {backgroundVideoEnabled && currentTrack.youtubeId && (
             <div className="absolute inset-0 overflow-hidden pointer-events-none -z-10 opacity-30">
               <iframe
-                src={`https://www.youtube-nocookie.com/embed/${currentTrack.youtubeId}?autoplay=1&mute=1&controls=0&showinfo=0&loop=1&playlist=${currentTrack.youtubeId}&playsinline=1&modestbranding=1&rel=0`}
+                src={`https://www.youtube-nocookie.com/embed/${currentTrack.youtubeId}?autoplay=1&mute=1&volume=0&controls=0&showinfo=0&loop=1&playlist=${currentTrack.youtubeId}&playsinline=1&modestbranding=1&rel=0`}
                 title="Ambient Video Background"
                 className="w-[160%] h-[160%] -translate-x-[30%] -translate-y-[30%] object-cover filter blur-3xl scale-125 pointer-events-none"
                 tabIndex="-1"
                 aria-hidden="true"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allow="autoplay"
                 referrerPolicy="strict-origin-when-cross-origin"
               />
               <div className="absolute inset-0 bg-gradient-to-b from-[#121212]/80 via-[#121212]/85 to-[#121212]" />
