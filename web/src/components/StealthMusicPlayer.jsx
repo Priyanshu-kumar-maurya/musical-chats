@@ -219,6 +219,28 @@ const VIBE_CHIPS = [
   { id: 'romantic', label: 'Romantic', emoji: '❤️' }
 ];
 
+// Helper to normalize and fingerprint songs across the entire app to strictly prevent duplicate songs on scroll
+export function getSongFingerprint(rawTitle, rawArtist) {
+  if (!rawTitle) return '';
+  const cleanTitle = rawTitle
+    .toLowerCase()
+    .replace(/\s*[\(\[].*?[\)\]]/gi, '')
+    .replace(/\s*[-–—|].*$/g, '')
+    .replace(/\b(trending|version|lofi|slowed|reverb|radio|remix|acoustic|original|audio|video|lyrics|full song|cover|edit|mix|banger|hits)\b/gi, '')
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+
+  if (cleanTitle.length < 4) {
+    const cleanArtist = (rawArtist || '')
+      .toLowerCase()
+      .split(/[,&/|]/)[0]
+      .replace(/[^a-z0-9]/g, '')
+      .slice(0, 10);
+    return `${cleanTitle}__${cleanArtist}`;
+  }
+  return cleanTitle;
+}
+
 // Continuous procedural fallback pool to guarantee non-stop songs even if offline
 const BACKUP_STREAM_POOL = [
   {
@@ -316,15 +338,106 @@ const BACKUP_STREAM_POOL = [
     artwork: "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?w=500&q=80",
     youtubeId: "sK7riqg2mr4",
     isAudioStream: true
+  },
+  {
+    id: "stream-pool-ilahi",
+    title: "Ilahi - Yeh Jawaani Hai Deewani",
+    artist: "Arijit Singh, Pritam",
+    album: "Yeh Jawaani Hai Deewani",
+    duration: 229,
+    durationText: "3:49",
+    url: "https://aac.saavncdn.com/047/d1366530468931703ac909e82a3ee788_320.mp4",
+    artwork: "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=500&q=80",
+    youtubeId: "fdubeMFwuGs",
+    isAudioStream: true
+  },
+  {
+    id: "stream-pool-kal-ho-naa-ho",
+    title: "Kal Ho Naa Ho",
+    artist: "Sonu Nigam, Shankar-Ehsaan-Loy",
+    album: "Kal Ho Naa Ho",
+    duration: 321,
+    durationText: "5:21",
+    url: "https://aac.saavncdn.com/801/571617f7810fb699ed56bc8a7d9e40d9_320.mp4",
+    artwork: "https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=500&q=80",
+    youtubeId: "g0eO74UmRBs",
+    isAudioStream: true
+  },
+  {
+    id: "stream-pool-labon-ko",
+    title: "Labon Ko - Bhool Bhulaiyaa",
+    artist: "KK, Pritam",
+    album: "Bhool Bhulaiyaa",
+    duration: 344,
+    durationText: "5:44",
+    url: "https://aac.saavncdn.com/801/571617f7810fb699ed56bc8a7d9e40d9_320.mp4",
+    artwork: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&q=80",
+    youtubeId: "1p8T03L3Bcw",
+    isAudioStream: true
+  },
+  {
+    id: "stream-pool-with-you",
+    title: "With You",
+    artist: "AP Dhillon",
+    album: "With You",
+    duration: 154,
+    durationText: "2:34",
+    url: "https://aac.saavncdn.com/973/76216adb3df5ef476f948891b40efb7a_320.mp4",
+    artwork: "https://images.unsplash.com/photo-1445985543470-41fdd6ce388d?w=500&q=80",
+    youtubeId: "Dk_uWz-Hj60",
+    isAudioStream: true
+  },
+  {
+    id: "stream-pool-softly",
+    title: "Softly - Four Me",
+    artist: "Karan Aujla, Ikky",
+    album: "Four Me",
+    duration: 155,
+    durationText: "2:35",
+    url: "https://aac.saavncdn.com/209/88cd9a1cc0af8768d67272876bb09851_320.mp4",
+    artwork: "https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=500&q=80",
+    youtubeId: "cWMxce1kgnM",
+    isAudioStream: true
+  },
+  {
+    id: "stream-pool-starboy",
+    title: "Starboy",
+    artist: "The Weeknd, Daft Punk",
+    album: "Starboy",
+    duration: 230,
+    durationText: "3:50",
+    url: "https://aac.saavncdn.com/238/35726d4394604604e961bf5b846870d0_320.mp4",
+    artwork: "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=500&q=80",
+    youtubeId: "34Na4j8AVgA",
+    isAudioStream: true
+  },
+  {
+    id: "stream-pool-perfect",
+    title: "Perfect",
+    artist: "Ed Sheeran",
+    album: "Divide",
+    duration: 263,
+    durationText: "4:23",
+    url: "https://aac.saavncdn.com/815/483a6e118e8108cbb3e5cd8701674f32_320.mp4",
+    artwork: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=500&q=80",
+    youtubeId: "2Vv-BfVoq4g",
+    isAudioStream: true
   }
 ];
 
-function getProceduralBatch(page) {
-  const batchSize = 6;
-  return BACKUP_STREAM_POOL.map((item, idx) => ({
+function getProceduralBatch(page, existingKeys = new Set()) {
+  const unused = BACKUP_STREAM_POOL.filter(item => {
+    const key = getSongFingerprint(item.title, item.artist);
+    return !existingKeys.has(key);
+  });
+  const source = unused.length > 0 ? unused : BACKUP_STREAM_POOL;
+  const startIndex = ((page - 1) * 4) % source.length;
+  const picked = source.slice(startIndex, startIndex + 4);
+  const results = picked.length > 0 ? picked : source.slice(0, 4);
+
+  return results.map((item, idx) => ({
     ...item,
-    id: `stream-page-${page}-song-${idx}`,
-    title: page > 1 ? `${item.title} (Live Mix ${page})` : item.title,
+    id: `stream-pool-${page}-${idx}-${item.id}`,
     color: "from-purple-950/60 via-slate-950 to-slate-950"
   }));
 }
@@ -463,6 +576,8 @@ export default function StealthMusicPlayer({
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const sentinelRef = useRef(null);
   const listScrollRef = useRef(null);
+  const seenSongKeysRef = useRef(new Set(tracks.map(t => getSongFingerprint(t.title, t.artist)).filter(Boolean)));
+  const feedSessionSeedRef = useRef(Math.floor(Math.random() * 10000));
 
   // YouTube Playlist Import States
   const [showImportYoutubeModal, setShowImportYoutubeModal] = useState(false);
@@ -2234,8 +2349,17 @@ export default function StealthMusicPlayer({
 
       if (newItems.length > 0) {
         setSearchResults(prev => {
-          const seen = new Set(prev.map(s => s.id));
-          const filtered = newItems.filter(s => !seen.has(s.id));
+          const seenIds = new Set(prev.map(s => s.id));
+          const seenKeys = new Set(prev.map(s => getSongFingerprint(s.title, s.artist)));
+          const filtered = [];
+          for (const s of newItems) {
+            const key = getSongFingerprint(s.title, s.artist);
+            if (!seenIds.has(s.id) && (!key || !seenKeys.has(key))) {
+              if (key) seenKeys.add(key);
+              seenIds.add(s.id);
+              filtered.push(s);
+            }
+          }
           return filtered.length > 0 ? [...prev, ...filtered] : prev;
         });
         setSearchPage(nextPage);
@@ -2562,14 +2686,19 @@ export default function StealthMusicPlayer({
   const fetchDynamicFeed = useCallback(async (genre = selectedGenre, replace = false) => {
     setIsFeedRefreshing(true);
     try {
+      if (replace) {
+        feedSessionSeedRef.current = Math.floor(Math.random() * 10000);
+        seenSongKeysRef.current.clear();
+      }
+
       let effectiveGenre = genre;
       if (genre === 'for_you') {
         const sorted = Object.entries(tasteProfile?.genres || userTastes || {}).sort((a, b) => b[1] - a[1]);
-        effectiveGenre = sorted[0]?.[0] || 'all';
+        effectiveGenre = sorted[0]?.[0] || 'for_you';
       }
 
-      // Compute taste affinity params
-      let params = `genre=${encodeURIComponent(effectiveGenre)}&page=1&fresh=1`;
+      // Compute taste affinity params with session seed
+      let params = `genre=${encodeURIComponent(effectiveGenre)}&page=1&fresh=1&seed=${feedSessionSeedRef.current}`;
       if (tasteProfile) {
         const likedG = Object.entries(tasteProfile.genres || {})
           .filter(([_, score]) => score > 1)
@@ -2615,7 +2744,7 @@ export default function StealthMusicPlayer({
           }));
 
           // Rank & filter tracks based on learned taste profile (boost liked/listened, demote/hide skipped)
-          const fresh = rawFresh
+          const ranked = rawFresh
             .filter(t => calculateTrackRelevance(t, tasteProfile, likedSongIds) > -45)
             .sort((a, b) => {
               const relA = calculateTrackRelevance(a, tasteProfile, likedSongIds);
@@ -2623,20 +2752,30 @@ export default function StealthMusicPlayer({
               return relB - relA;
             });
 
+          const poolToFilter = ranked.length > 0 ? ranked : rawFresh;
+          const uniqueFresh = [];
+          for (const t of poolToFilter) {
+            const key = getSongFingerprint(t.title, t.artist);
+            if (key && !seenSongKeysRef.current.has(key)) {
+              seenSongKeysRef.current.add(key);
+              uniqueFresh.push(t);
+            }
+          }
+
           setTracks(prev => {
             if (replace) {
-              return fresh.length > 0 ? fresh : rawFresh;
+              return uniqueFresh.length > 0 ? uniqueFresh : poolToFilter;
             }
             const existingIds = new Set(prev.map(t => t.id));
-            const newOnly = (fresh.length > 0 ? fresh : rawFresh).filter(t => !existingIds.has(t.id));
+            const newOnly = uniqueFresh.filter(t => !existingIds.has(t.id));
             return newOnly.length > 0 ? [...newOnly, ...prev] : prev;
           });
 
           // Only default currentTrack to first item on very first install when user has NEVER played any track
           try {
             const hasSavedTrack = localStorage.getItem('secret_bubble_last_track');
-            if (!hasSavedTrack && fresh[0]) {
-              setCurrentTrack(fresh[0]);
+            if (!hasSavedTrack && uniqueFresh[0]) {
+              setCurrentTrack(uniqueFresh[0]);
             }
           } catch {}
 
@@ -2697,11 +2836,11 @@ export default function StealthMusicPlayer({
       let effectiveGenre = selectedGenre;
       if (selectedGenre === 'for_you') {
         const sorted = Object.entries(tasteProfile?.genres || userTastes || {}).sort((a, b) => b[1] - a[1]);
-        effectiveGenre = sorted[0]?.[0] || 'all';
+        effectiveGenre = sorted[0]?.[0] || 'for_you';
       }
 
-      // Compute taste affinity params
-      let params = `genre=${encodeURIComponent(effectiveGenre)}&page=${nextPage}`;
+      // Compute taste affinity params with persistent session seed for deep endless variety
+      let params = `genre=${encodeURIComponent(effectiveGenre)}&page=${nextPage}&seed=${feedSessionSeedRef.current}`;
       if (tasteProfile) {
         const likedG = Object.entries(tasteProfile.genres || {})
           .filter(([_, score]) => score > 1)
@@ -2731,7 +2870,7 @@ export default function StealthMusicPlayer({
 
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const timeoutId = setTimeout(() => controller.abort(), 6500);
         const res = await fetch(`${apiBase}/api/music/feed?${params}`, {
           signal: controller.signal
         });
@@ -2759,25 +2898,58 @@ export default function StealthMusicPlayer({
         // Network or timeout
       }
 
-      // If backend returned songs, filter out skipped and append deduplicated
+      // If backend returned songs, filter out skipped and append strictly deduplicated
       if (newTracks.length > 0) {
         const filteredNew = newTracks.filter(t => calculateTrackRelevance(t, tasteProfile, likedSongIds) > -45);
-        const toAppend = filteredNew.length > 0 ? filteredNew : newTracks;
+        const candidates = filteredNew.length > 0 ? filteredNew : newTracks;
+        let freshAdded = 0;
+
         setTracks(prev => {
           const existingIds = new Set(prev.map(t => t.id));
-          const filtered = toAppend.filter(t => !existingIds.has(t.id));
-          return filtered.length > 0 ? [...prev, ...filtered] : prev;
+          const uniqueToAdd = [];
+          for (const t of candidates) {
+            const key = getSongFingerprint(t.title, t.artist);
+            if (t.id && !existingIds.has(t.id) && (!key || !seenSongKeysRef.current.has(key))) {
+              if (key) seenSongKeysRef.current.add(key);
+              existingIds.add(t.id);
+              uniqueToAdd.push(t);
+            }
+          }
+          freshAdded = uniqueToAdd.length;
+          return uniqueToAdd.length > 0 ? [...prev, ...uniqueToAdd] : prev;
         });
+
         setFeedPage(nextPage);
+
+        // If this page returned mostly songs already seen in this session, immediately fetch next page
+        // so the user gets fresh songs seamlessly on scroll!
+        if (freshAdded < 3 && nextPage < 60) {
+          setTimeout(() => {
+            if (!isLoadingRef.current) {
+              loadMoreSongs();
+            }
+          }, 250);
+        }
       } else {
-        // Offline / Fallback generator to guarantee continuous non-stop stream
-        const fallbackBatch = getProceduralBatch(nextPage);
-        const filteredFallback = fallbackBatch.filter(t => calculateTrackRelevance(t, tasteProfile, likedSongIds) > -45);
-        setTracks(prev => {
-          const existingIds = new Set(prev.map(t => t.id));
-          const filtered = (filteredFallback.length > 0 ? filteredFallback : fallbackBatch).filter(t => !existingIds.has(t.id));
-          return [...prev, ...filtered];
-        });
+        // Offline / Fallback generator to guarantee continuous non-stop stream without duplicates
+        const fallbackBatch = getProceduralBatch(nextPage, seenSongKeysRef.current);
+        if (fallbackBatch.length > 0) {
+          const filteredFallback = fallbackBatch.filter(t => calculateTrackRelevance(t, tasteProfile, likedSongIds) > -45);
+          const toAdd = filteredFallback.length > 0 ? filteredFallback : fallbackBatch;
+          setTracks(prev => {
+            const existingIds = new Set(prev.map(t => t.id));
+            const uniqueToAdd = [];
+            for (const t of toAdd) {
+              const key = getSongFingerprint(t.title, t.artist);
+              if (t.id && !existingIds.has(t.id) && (!key || !seenSongKeysRef.current.has(key))) {
+                if (key) seenSongKeysRef.current.add(key);
+                existingIds.add(t.id);
+                uniqueToAdd.push(t);
+              }
+            }
+            return uniqueToAdd.length > 0 ? [...prev, ...uniqueToAdd] : prev;
+          });
+        }
         setFeedPage(nextPage);
       }
     } catch (err) {

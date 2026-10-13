@@ -1717,43 +1717,124 @@ app.get('/api/music/search', async (req, res) => {
 });
 
 // Endless Feed / Recommendations for Infinite Scrolling: Returns batches of popular streaming tracks by page
-// Dynamic Genre Feed Topics for Diverse Recommendations
+// Helper to fingerprint titles and detect duplicate song variants (remixes, trending versions, film tags)
+function getFeedFingerprint(rawTitle, rawArtist) {
+  if (!rawTitle) return '';
+  const cleanTitle = rawTitle
+    .toLowerCase()
+    .replace(/\s*[\(\[].*?[\)\]]/gi, '')
+    .replace(/\s*[-–—|].*$/g, '')
+    .replace(/\b(trending|version|lofi|slowed|reverb|radio|remix|acoustic|original|audio|video|lyrics|full song|cover|edit|mix|banger|hits)\b/gi, '')
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+
+  if (cleanTitle.length < 4) {
+    const cleanArtist = (rawArtist || '')
+      .toLowerCase()
+      .split(/[,&/|]/)[0]
+      .replace(/[^a-z0-9]/g, '')
+      .slice(0, 10);
+    return `${cleanTitle}__${cleanArtist}`;
+  }
+  return cleanTitle;
+}
+
+// Expansive Dynamic Genre Feed Topics for Diverse, Non-Repeating Recommendations
 const GENRE_FEED_TOPICS = {
   all: [
-    'Trending Hindi Hits 2026', 'Arijit Singh Best', 'Latest Punjabi Bangers 2026',
-    'Bollywood Romantic Hits', 'Diljit Dosanjh Top', 'Global English Pop Hits',
-    'Lofi Hindi Chill', 'Pritam Blockbusters', 'Anirudh Ravichander Hits',
-    'Shreya Ghoshal Hits', 'KK Evergreen Melodies', 'Atif Aslam Classics',
-    'Karan Aujla Hits', 'AP Dhillon Melodies', 'Sidhu Moose Wala Top'
+    'Trending Hindi Hits 2026', 'Arijit Singh Soulful Hits', 'Sidhu Moose Wala All Hits',
+    'Bollywood Romantic Melodies', 'Diljit Dosanjh Bangers', 'Global Pop Chartbusters',
+    'Lofi Hindi Chill Beats', 'Pritam Superhit Soundtracks', 'Anirudh Ravichander Anthems',
+    'Shreya Ghoshal Melodies', 'KK Evergreen Classics', 'Atif Aslam Unplugged',
+    'Karan Aujla Latest Punjabi', 'AP Dhillon Hits', 'Mohit Chauhan Travel Songs',
+    'Sonu Nigam Romantic Classics', 'Jubin Nautiyal Hits', 'B Praak Heartbreak Hits',
+    'A.R. Rahman Golden Melodies', 'Vishal Mishra Hits', 'Darshan Raval Pop',
+    'Sachin-Jigar Dance Hits', 'Amit Trivedi Indie Bollywood', 'Lucky Ali Nostalgia',
+    'Shaan 2000s Pop', 'Shankar Ehsaan Loy Hits', 'Mithoon Melodies',
+    'Sunidhi Chauhan Dance Hits', 'Neha Kakkar Party Anthems', 'Badshah Rap Hits',
+    'Yo Yo Honey Singh Hits', 'Talwiinder Punjabi Melodies', 'Shubh Punjabi Hits',
+    'The Weeknd Pop Hits', 'Ed Sheeran Acoustic Hits', 'Taylor Swift Pop Classics',
+    'Coldplay Anthems', 'Imagine Dragons Hits', 'Billboard Hot 100 Hits',
+    'Slowed and Reverb Hindi Hits'
   ],
   hindi: [
-    'Latest Bollywood 2026', 'Arijit Singh Best', 'Pritam Melodies',
-    'Shreya Ghoshal Hits', 'KK Evergreen Hits', 'Mohit Chauhan Melodies',
-    'Sonu Nigam Romantic', 'Jubin Nautiyal Hits', 'B Praak Hits', 'A.R. Rahman Classics',
-    'Vishal Mishra Romantic', 'Darshan Raval Hits', 'Sachin-Jigar Hits'
+    'Latest Bollywood Hits 2026', 'Arijit Singh Soulful Songs', 'Pritam Superhit Melodies',
+    'Shreya Ghoshal Heartfelt Hits', 'KK Evergreen Bollywood', 'Mohit Chauhan Romantic Hits',
+    'Sonu Nigam Golden Hits', 'Jubin Nautiyal Love Songs', 'B Praak Soulful Melodies',
+    'A.R. Rahman Hindi Masterpieces', 'Vishal Mishra Melodies', 'Darshan Raval Love Songs',
+    'Sachin-Jigar Melodies', 'Amit Trivedi Soundtracks', 'Lucky Ali Indie Melodies',
+    'Shaan Evergreen Love', 'Shankar-Ehsaan-Loy Bollywood', 'Mithoon Soulful Melodies',
+    'Sunidhi Chauhan Hits', 'Anuv Jain Acoustic Indie', 'Prateek Kuhad Indie Hits',
+    '90s Bollywood Evergreen Songs', '2000s Bollywood Nostalgic Hits', '2010s Bollywood Hits',
+    'Jatin-Lalit 90s Romance', 'Kumar Sanu Romantic Hits', 'Udit Narayan Melodies',
+    'Alka Yagnik Romantic Duets', 'Kavita Krishnamurthy Classics', 'Jagjit Singh Ghazals',
+    'Bollywood Acoustic Unplugged', 'Bollywood Monsoon Melodies', 'Bollywood Road Trip Songs',
+    'Bollywood Heartbreak Anthems', 'Sufi Bollywood Soul'
   ],
   bollywood: [
-    'Bollywood Blockbusters 2026', 'Bollywood Romantic Hits', 'Trending Bollywood Songs',
-    'Pritam Hits', 'Arijit Singh Bollywood', 'A.R. Rahman Classics', 'Karan Johar Hits',
-    '90s Bollywood Evergreen', '2000s Bollywood Nostalgia', 'Yash Raj Films Hits'
+    'Bollywood Blockbusters 2026', 'Bollywood Romantic Songs', 'Trending Bollywood Dance Hits',
+    'Pritam Bollywood Soundtracks', 'Arijit Singh Bollywood Hits', 'A.R. Rahman Film Hits',
+    'Yash Raj Films Evergreen Songs', 'Dharma Productions Hits', '90s Bollywood Romantic Hits',
+    '2000s Bollywood Romance', '2010s Bollywood Dance Party', 'Karan Johar Movie Hits',
+    'Imtiaz Ali Soundtracks', 'Ranbir Kapoor Hit Songs', 'Shah Rukh Khan Romantic Anthems',
+    'Salman Khan Dance Songs', 'Hrithik Roshan Dance Bangers', 'Deepika Padukone Hit Songs',
+    'Bollywood Wedding Anthems', 'Bollywood Rain Romance', 'Bollywood College Nostalgia',
+    'Vishal-Shekhar Bollywood Hits', 'Sanjay Leela Bhansali Soundtracks', 'Ajay-Atul Bollywood Hits',
+    'Anu Malik 90s Blockbusters', 'Nadeem-Shravan 90s Hits', 'Roop Kumar Rathod Melodies',
+    'Kishore Kumar Evergreen Classics', 'Mohammed Rafi Golden Hits', 'Lata Mangeshkar Masterpieces',
+    'Mukesh Classics', 'R.D. Burman Retro Hits', 'Bappi Lahiri Retro Disco',
+    'Bollywood Unplugged Acoustic', 'Bollywood Sufi Hits'
   ],
   punjabi: [
-    'Latest Punjabi Hits 2026', 'Sidhu Moose Wala Top', 'Diljit Dosanjh Hits',
-    'Karan Aujla Bangers', 'AP Dhillon Hits', 'Shubh Punjabi Pop', 'Badshah Hits',
-    'Amrit Maan Punjabi', 'Jordan Sandhu Hits', 'Honey Singh Party'
+    'Latest Punjabi Hits 2026', 'Sidhu Moose Wala Top Bangers', 'Diljit Dosanjh Global Hits',
+    'Karan Aujla Street Bangers', 'AP Dhillon Melodies', 'Shubh Punjabi Pop',
+    'Badshah Punjabi Party', 'Amrit Maan Bangers', 'Jordan Sandhu Folk Hits',
+    'Yo Yo Honey Singh Punjabi', 'Talwiinder Punjabi Melancholy', 'B Praak Heartfelt Punjabi',
+    'Harrdy Sandhu Dance Hits', 'Guru Randhawa High Rated', 'Jassie Gill Romantic Punjabi',
+    'Parmish Verma Desi Bangers', 'Amrinder Gill Melodious Punjabi', 'PropheC Urban Punjabi',
+    'Mickey Singh Urban Melodies', 'Mankirt Aulakh Punjabi Hits', 'Garry Sandhu Dance Songs',
+    'Kulwinder Billa Hits', 'Tarsem Jassar Punjabi Classics', 'Satinder Sartaaj Sufi Punjabi',
+    'Gurnam Bhullar Romantic Punjabi', 'Akhil Punjabi Romance', 'Ninja Punjabi Hits',
+    'Ranjit Bawa Desi Punjabi', 'Sukhe Musical Doctorz', 'Bohemia Punjabi Rap Classics',
+    'Wazir Patar Punjabi Bangers', 'Arjan Dhillon Top Hits', 'Prem Dhillon Urban Punjabi',
+    'Cheema Y Punjabi Bangers', 'Nimrat Khaira Punjabi Hits'
   ],
   english: [
     'Top English Hits 2026', 'Global Pop Hits', 'Billboard Hot 100',
-    'Ed Sheeran Hits', 'Taylor Swift Pop', 'Dua Lipa Hits', 'The Weeknd',
-    'Post Malone Hits', 'Coldplay Anthems', 'Imagine Dragons Hits'
+    'Ed Sheeran Acoustic & Pop', 'Taylor Swift Eras Hits', 'Dua Lipa Dance Pop',
+    'The Weeknd Synthwave Pop', 'Post Malone Chill Hits', 'Coldplay Anthems',
+    'Imagine Dragons Rock Pop', 'Bruno Mars Funk & Soul', 'Billie Eilish Alt Pop',
+    'Charlie Puth Pop Melodies', 'Maroon 5 Pop Anthems', 'Adele Heartfelt Ballads',
+    'Shawn Mendes Acoustic Pop', 'Justin Bieber Pop Hits', 'Harry Styles Pop Hits',
+    'Ariana Grande Pop Anthems', 'Olivia Rodrigo Pop Rock', 'Sia Pop Power Anthems',
+    'The Chainsmokers EDM Pop', 'Avicii Melodic EDM', 'Kygo Tropical House',
+    'Marshmello Pop Dance', 'Alan Walker Electronic Anthems', 'Calvin Harris Dance Anthems',
+    'David Guetta Electronic Hits', 'Drake Hip Hop Hits', 'Kendrick Lamar Rap Anthems',
+    'Eminem Hip Hop Classics', 'Travis Scott Trap Anthems', 'Post Malone Hip Hop Melodies',
+    'OneRepublic Pop Anthems', 'Queen Classic Rock Anthems'
   ],
   lofi: [
-    'Lofi Hindi Chill', 'Midnight Chill Beats', 'Slowed and Reverb Hindi', 'Lofi Acoustic Study', 'Late Night Beats',
-    'Rainy Day Hindi Lofi', 'Acoustic Bollywood Coffee'
+    'Lofi Hindi Chill', 'Midnight Chill Beats', 'Slowed and Reverb Hindi Hits',
+    'Lofi Acoustic Study', 'Late Night Beats', 'Rainy Day Hindi Lofi',
+    'Acoustic Bollywood Coffee', 'Ambient Hindi Chill', 'Nostalgic Hindi Lofi',
+    'Sad Hindi Lofi', 'Sleep Lofi Hindi', 'Cafe Vibe Lofi Chill',
+    'Monsoon Window Lofi', 'Midnight Drive Hindi Lofi', 'Sunset Chillhop Hindi',
+    'Arijit Singh Lofi Chill', 'KK Lofi Memories', 'Atif Aslam Lofi Vibes',
+    'Pritam Acoustic Lofi', 'Deep Focus Study Beats', 'ChilledCow Lo-Fi Beats',
+    'Peaceful Piano Lofi', 'Slow Reverb Night Drive', 'Indie Hindi Lofi Beats',
+    'Bollywood Retro Lofi'
   ],
   romantic: [
     'Bollywood Romantic Hits', 'Arijit Singh Love Songs', 'Heartfelt Hindi Melodies',
-    'Atif Aslam Romantic', 'Romantic Acoustic Love', 'Monsoon Love Songs Hindi', 'Soulful Hindi Melodies'
+    'Atif Aslam Romantic Classics', 'Romantic Acoustic Love Hindi', 'Monsoon Love Songs Hindi',
+    'Soulful Hindi Melodies', 'Mohit Chauhan Love Songs', 'KK Romantic Anthems',
+    'Sonu Nigam Romantic Classics', 'Jubin Nautiyal Love Ballads', 'Vishal Mishra Heartfelt Songs',
+    'Darshan Raval Love Melodies', 'Shreya Ghoshal Romantic Hits', 'Anuv Jain Acoustic Love',
+    'Prateek Kuhad Romantic Indie', 'Bollywood Sunset Romance', 'Late Night Romance Hindi',
+    'Duets of Bollywood Romance', 'Unplugged Love Melodies Hindi', 'First Love Bollywood Nostalgia',
+    '90s Romantic Bollywood Duets', '2000s Romantic Hits', 'Pritam Romantic Anthems',
+    'A.R. Rahman Romantic Classics', 'Mithoon Love Ballads', 'Sachin-Jigar Romantic Songs',
+    'Heartbreak & Healing Hindi Melodies', 'Acoustic Guitar Romance Hindi', 'Melodious Hindi Love Songs'
   ]
 };
 
@@ -1788,6 +1869,7 @@ app.get('/api/music/feed', async (req, res) => {
     // 1. Add top artist searches if available
     topArtists.slice(0, 4).forEach(artist => {
       customTopics.push(`${artist} Hits`);
+      customTopics.push(`${artist} Soulful Songs`);
       customTopics.push(`${artist} Best Songs`);
     });
 
@@ -1801,6 +1883,9 @@ app.get('/api/music/feed', async (req, res) => {
     // Fallback if no specific liked genres yet
     if (customTopics.length === 0) {
       customTopics = [...GENRE_FEED_TOPICS.all];
+    } else {
+      // Blend with general topics for diversity
+      customTopics.push(...GENRE_FEED_TOPICS.all.slice(0, 15));
     }
 
     // 3. Strongly exclude any topic matching skipped genres or skipped artists
@@ -1819,27 +1904,43 @@ app.get('/api/music/feed', async (req, res) => {
     topics = customTopics;
   }
 
-  // YouTube-like Fresh Dynamic Feed:
-  // On page 1, pick a randomized seed topic so reopening or refreshing the app ALWAYS presents new, rotating songs!
-  const isFresh = req.query.fresh === 'true' || req.query.fresh === '1' || page === 1;
-  const seed = isFresh ? Math.floor(Math.random() * topics.length) : 0;
-  const topic = req.query.topic || topics[(seed + page - 1) % topics.length];
+  // Consistent session seed provided by client, or randomized on page 1
+  const clientSeed = parseInt(req.query.seed, 10);
+  const baseSeed = !isNaN(clientSeed) ? Math.abs(clientSeed) : (page === 1 ? Math.floor(Math.random() * topics.length) : 0);
+
+  // Calculate topic index and deep query page
+  const topicIdx = (baseSeed + (page - 1)) % topics.length;
+  const topic = req.query.topic || topics[topicIdx];
+  const queryPage = Math.floor((page - 1) / topics.length) + 1;
 
   try {
-    // Use real paged search.getResults for 25 high-quality tracks with direct 320kbps streams
-    const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topic)}&p=1&n=25&ctx=android&_format=json`;
+    // Use deep paged search.getResults (p=queryPage) for 30 high-quality tracks with direct 320kbps streams
+    const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topic)}&p=${queryPage}&n=30&ctx=android&_format=json`;
     const saavnRes = await fetch(searchUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
     });
     const data = await saavnRes.json();
     const songs = data.results || [];
     const results = [];
+    const seenBatchKeys = new Set();
 
     if (songs.length > 0) {
       for (const s of songs) {
         if (s.encrypted_media_url) {
           const directAudio = decryptSaavnUrl(s.encrypted_media_url);
           if (directAudio) {
+            const rawTitle = cleanHtml(s.song || s.title);
+            const rawArtist = cleanHtml(s.primary_artists || s.singers || s.more_info?.primary_artists || 'Online Music');
+
+            // Intra-batch deduplication: avoid multiple versions of the same track in one batch
+            const fp = getFeedFingerprint(rawTitle, rawArtist);
+            if (fp && seenBatchKeys.has(fp)) {
+              continue;
+            }
+            if (fp) {
+              seenBatchKeys.add(fp);
+            }
+
             const dur = parseInt(s.duration, 10) || 240;
             const min = Math.floor(dur / 60);
             const sec = dur % 60;
@@ -1853,9 +1954,9 @@ app.get('/api/music/feed', async (req, res) => {
             const releaseDate = s.release_date || s.more_info?.release_date || '';
 
             results.push({
-              id: `track-${s.id}-${page}`,
-              title: cleanHtml(s.song || s.title),
-              artist: cleanHtml(s.primary_artists || s.singers || s.more_info?.primary_artists || 'Online Music'),
+              id: `track-${s.id}`, // Canonical track ID without page suffix for reliable deduplication
+              title: rawTitle,
+              artist: rawArtist,
               album: cleanHtml(s.album || 'Online Album'),
               duration: dur,
               durationText: `${min}:${sec < 10 ? '0' : ''}${sec}`,
