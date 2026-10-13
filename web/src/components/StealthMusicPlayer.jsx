@@ -241,6 +241,58 @@ export function getSongFingerprint(rawTitle, rawArtist) {
   return cleanTitle;
 }
 
+// Extract artist and composer tags for anti-clumping diversity
+export function extractArtistKeys(artistStr) {
+  if (!artistStr) return [];
+  return artistStr
+    .toLowerCase()
+    .split(/[,&/|]|\b(?:feat|ft|featuring|with)\b/i)
+    .map(p => p.replace(/[^a-z0-9]/g, '').trim())
+    .filter(p => p.length > 2);
+}
+
+// Check if two songs share any primary artist or composer
+export function hasArtistOverlap(keysA, keysB) {
+  if (!keysA || !keysB || keysA.length === 0 || keysB.length === 0) return false;
+  return keysA.some(a => keysB.includes(a));
+}
+
+// Spotify/YouTube-style Diversity Interleaver:
+// Caps any single artist/composer to max 2 in a batch and spaces them apart so no two adjacent songs share an artist/composer
+export function disperseArtistsAndComposers(songs, maxSameArtistTotal = 2) {
+  if (!songs || songs.length <= 1) return songs;
+
+  const artistFreq = new Map();
+  const capped = [];
+
+  for (const s of songs) {
+    const keys = extractArtistKeys(s.artist);
+    const primary = keys[0] || 'unknown';
+    const c = artistFreq.get(primary) || 0;
+    if (c < maxSameArtistTotal) {
+      artistFreq.set(primary, c + 1);
+      capped.push({ song: s, keys });
+    }
+  }
+
+  const pool = capped.length > 0 ? capped : songs.map(s => ({ song: s, keys: extractArtistKeys(s.artist) }));
+  const result = [];
+  const remaining = [...pool];
+  let lastKeys = [];
+
+  while (remaining.length > 0) {
+    let nextIdx = remaining.findIndex(item => !hasArtistOverlap(item.keys, lastKeys));
+    if (nextIdx === -1) {
+      nextIdx = 0;
+    }
+    const picked = remaining.splice(nextIdx, 1)[0];
+    result.push(picked.song);
+    lastKeys = picked.keys;
+  }
+
+  return result;
+}
+
 // Continuous procedural fallback pool to guarantee non-stop songs even if offline
 const BACKUP_STREAM_POOL = [
   {
@@ -2762,20 +2814,23 @@ export default function StealthMusicPlayer({
             }
           }
 
+          const dispersedFresh = disperseArtistsAndComposers(uniqueFresh, 2);
+          const finalFresh = dispersedFresh.length > 0 ? dispersedFresh : uniqueFresh;
+
           setTracks(prev => {
             if (replace) {
-              return uniqueFresh.length > 0 ? uniqueFresh : poolToFilter;
+              return finalFresh.length > 0 ? finalFresh : poolToFilter;
             }
             const existingIds = new Set(prev.map(t => t.id));
-            const newOnly = uniqueFresh.filter(t => !existingIds.has(t.id));
+            const newOnly = finalFresh.filter(t => !existingIds.has(t.id));
             return newOnly.length > 0 ? [...newOnly, ...prev] : prev;
           });
 
           // Only default currentTrack to first item on very first install when user has NEVER played any track
           try {
             const hasSavedTrack = localStorage.getItem('secret_bubble_last_track');
-            if (!hasSavedTrack && uniqueFresh[0]) {
-              setCurrentTrack(uniqueFresh[0]);
+            if (!hasSavedTrack && finalFresh[0]) {
+              setCurrentTrack(finalFresh[0]);
             }
           } catch {}
 
@@ -2902,12 +2957,14 @@ export default function StealthMusicPlayer({
       if (newTracks.length > 0) {
         const filteredNew = newTracks.filter(t => calculateTrackRelevance(t, tasteProfile, likedSongIds) > -45);
         const candidates = filteredNew.length > 0 ? filteredNew : newTracks;
+        const dispersedCandidates = disperseArtistsAndComposers(candidates, 2);
+        const toProcess = dispersedCandidates.length > 0 ? dispersedCandidates : candidates;
         let freshAdded = 0;
 
         setTracks(prev => {
           const existingIds = new Set(prev.map(t => t.id));
           const uniqueToAdd = [];
-          for (const t of candidates) {
+          for (const t of toProcess) {
             const key = getSongFingerprint(t.title, t.artist);
             if (t.id && !existingIds.has(t.id) && (!key || !seenSongKeysRef.current.has(key))) {
               if (key) seenSongKeysRef.current.add(key);
@@ -2916,6 +2973,21 @@ export default function StealthMusicPlayer({
             }
           }
           freshAdded = uniqueToAdd.length;
+
+          // Cross-boundary artist check: ensure the first appended track does not share artist/composer with last track of prev
+          if (prev.length > 0 && uniqueToAdd.length > 1) {
+            const lastPrevArtistKeys = extractArtistKeys(prev[prev.length - 1].artist);
+            const firstNewArtistKeys = extractArtistKeys(uniqueToAdd[0].artist);
+            if (hasArtistOverlap(lastPrevArtistKeys, firstNewArtistKeys)) {
+              const swapIdx = uniqueToAdd.findIndex(s => !hasArtistOverlap(extractArtistKeys(s.artist), lastPrevArtistKeys));
+              if (swapIdx > 0) {
+                const temp = uniqueToAdd[0];
+                uniqueToAdd[0] = uniqueToAdd[swapIdx];
+                uniqueToAdd[swapIdx] = temp;
+              }
+            }
+          }
+
           return uniqueToAdd.length > 0 ? [...prev, ...uniqueToAdd] : prev;
         });
 
