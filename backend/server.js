@@ -1519,8 +1519,11 @@ function cleanHtml(str) {
     .replace(/&quot;/g, '"')
     .replace(/&amp;/g, '&')
     .replace(/&#039;/g, "'")
+    .replace(/&apos;/g, "'")
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(dec))
     .trim();
 }
 
@@ -2072,29 +2075,59 @@ app.get('/api/music/feed', async (req, res) => {
 });
 
 
-// Proxy Audio Stream (helps if client has CORS or byte-range issues)
+// Proxy Audio Stream with automatic bitrate fallback and direct streaming
 app.get('/api/music/proxy-stream', async (req, res) => {
   const audioUrl = req.query.url;
   if (!audioUrl) return res.status(400).send('Audio URL required');
 
-  try {
-    const range = req.headers.range;
-    const audioRes = await fetch(audioUrl, {
-      headers: range ? { range } : {}
-    });
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
 
-    res.status(audioRes.status);
-    for (const [key, value] of audioRes.headers.entries()) {
-      if (['content-type', 'content-length', 'accept-ranges', 'content-range'].includes(key.toLowerCase())) {
-        res.setHeader(key, value);
-      }
-    }
-    const arrayBuffer = await audioRes.arrayBuffer();
-    res.send(Buffer.from(arrayBuffer));
-  } catch (err) {
-    console.error('Audio proxy error:', err);
-    res.status(502).send('Error streaming audio');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
   }
+
+  const candidateUrls = [audioUrl];
+  if (audioUrl.includes('_320.mp4')) {
+    candidateUrls.push(audioUrl.replace('_320.mp4', '_160.mp4'));
+    candidateUrls.push(audioUrl.replace('_320.mp4', '_96.mp4'));
+  } else if (audioUrl.includes('_160.mp4')) {
+    candidateUrls.push(audioUrl.replace('_160.mp4', '_96.mp4'));
+  }
+
+  const range = req.headers.range;
+
+  for (const candidate of candidateUrls) {
+    try {
+      const audioRes = await fetch(candidate, {
+        headers: range ? { range } : {}
+      });
+
+      if (audioRes.ok || audioRes.status === 206) {
+        res.status(audioRes.status);
+        for (const [key, value] of audioRes.headers.entries()) {
+          if (['content-type', 'content-length', 'accept-ranges', 'content-range'].includes(key.toLowerCase())) {
+            res.setHeader(key, value);
+          }
+        }
+        if (audioRes.body) {
+          const { Readable } = require('stream');
+          Readable.fromWeb(audioRes.body).pipe(res);
+          return;
+        } else {
+          const arrayBuffer = await audioRes.arrayBuffer();
+          res.send(Buffer.from(arrayBuffer));
+          return;
+        }
+      }
+    } catch (candidateErr) {
+      // Continue to next candidate URL
+    }
+  }
+
+  res.status(502).send('Error streaming audio from all candidate bitrates');
 });
 
 app.get('/api/music/youtube-search', async (req, res) => {

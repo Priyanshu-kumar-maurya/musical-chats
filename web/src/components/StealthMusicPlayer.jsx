@@ -1225,6 +1225,7 @@ export default function StealthMusicPlayer({
   const canvasSlotRef = useRef(null);
   const [canvasSlotRect, setCanvasSlotRect] = useState(null);
   const modalVideoIframeRef = useRef(null);
+  const audioRecoveryAttemptRef = useRef({ trackId: null, step: 0 });
 
   const currentTrackIndex = useMemo(() => {
     if (!tracks || tracks.length === 0 || !currentTrack) return 0;
@@ -1316,23 +1317,30 @@ export default function StealthMusicPlayer({
     }
     const nextTrack = tracks[nextIndex] || tracks[0];
     if (nextTrack) {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-      }
-      if (iframeRef.current?.contentWindow) {
-        try {
-          iframeRef.current.contentWindow.postMessage(
-            JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
-            '*'
-          );
-        } catch (e) {}
-      }
+      audioRecoveryAttemptRef.current = { trackId: nextTrack.id, step: 0 };
       currentTrackStartTimeRef.current = Date.now();
       hasLoggedListenRef.current = false;
       setCurrentTrack(nextTrack);
       setCurrentTime(0);
       setIsPlaying(true);
+
+      if (nextTrack.url && audioRef.current) {
+        audioRef.current.src = nextTrack.url;
+        audioRef.current.load();
+        audioRef.current.play().catch(err => console.warn('Next track direct play notice:', err));
+        if (iframeRef.current?.contentWindow) {
+          try {
+            iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+              '*'
+            );
+          } catch (e) {}
+        }
+      } else if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.removeAttribute('src');
+        audioRef.current.load();
+      }
     }
   }, [tracks, currentTrack, isShuffle, duration, currentTime, recordTrackSkip]);
 
@@ -1347,23 +1355,30 @@ export default function StealthMusicPlayer({
     }
     const prevTrack = tracks[prevIndex] || tracks[0];
     if (prevTrack) {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-      }
-      if (iframeRef.current?.contentWindow) {
-        try {
-          iframeRef.current.contentWindow.postMessage(
-            JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
-            '*'
-          );
-        } catch (e) {}
-      }
+      audioRecoveryAttemptRef.current = { trackId: prevTrack.id, step: 0 };
       currentTrackStartTimeRef.current = Date.now();
       hasLoggedListenRef.current = false;
       setCurrentTrack(prevTrack);
       setCurrentTime(0);
       setIsPlaying(true);
+
+      if (prevTrack.url && audioRef.current) {
+        audioRef.current.src = prevTrack.url;
+        audioRef.current.load();
+        audioRef.current.play().catch(err => console.warn('Prev track direct play notice:', err));
+        if (iframeRef.current?.contentWindow) {
+          try {
+            iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+              '*'
+            );
+          } catch (e) {}
+        }
+      } else if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.removeAttribute('src');
+        audioRef.current.load();
+      }
     }
   }, [tracks, currentTrack]);
 
@@ -1876,7 +1891,8 @@ export default function StealthMusicPlayer({
     } else if (currentTrack?.isYoutube) {
       // YouTube mode: HTML5 audio MUST be strictly paused and reset
       audio.pause();
-      audio.currentTime = 0;
+      audio.removeAttribute('src');
+      audio.load();
       if (iframeRef.current?.contentWindow) {
         try {
           const cmd = isPlaying ? 'playVideo' : 'pauseVideo';
@@ -1953,6 +1969,12 @@ export default function StealthMusicPlayer({
             setIsPlaying(false);
           }
         }
+
+        // Catch YouTube embed errors (100 = deleted/private, 101/150 = owner disabled embed)
+        if (data.event === 'onError') {
+          console.warn('[YouTube Playback] Error code reported by embed:', data.info);
+          handleNextTrack(false);
+        }
       } catch (e) {}
     };
 
@@ -1981,30 +2003,111 @@ export default function StealthMusicPlayer({
     }
   };
 
-  const handleAudioError = (e) => {
-    console.warn('Audio stream playback error, attempting recovery:', e);
+  const handleAudioError = async (e) => {
     const audio = audioRef.current;
-    if (!audio || !currentTrack?.url) return;
+    if (!audio || !currentTrack) return;
 
-    // Resilient fallback: JioSaavn bitrate step-down from 320 to 160 to 96
-    if (currentTrack.url.includes('_320.mp4')) {
-      const fallback160 = currentTrack.url.replace('_320.mp4', '_160.mp4');
+    if (audioRecoveryAttemptRef.current.trackId !== currentTrack.id) {
+      audioRecoveryAttemptRef.current = { trackId: currentTrack.id, step: 0 };
+    }
+
+    const stage = audioRecoveryAttemptRef.current.step;
+    audioRecoveryAttemptRef.current.step += 1;
+    console.warn(`[Audio Recovery] Error on track "${currentTrack.title}", recovery stage: ${stage}`, e);
+
+    const originalUrl = currentTrack.originalUrl || currentTrack.url || '';
+
+    // Stage 0: Step down from 320kbps to 160kbps
+    if (stage === 0 && originalUrl.includes('_320.mp4')) {
+      const fallback160 = originalUrl.replace('_320.mp4', '_160.mp4');
+      setCurrentTrack(prev => ({ ...prev, url: fallback160, originalUrl }));
       audio.src = fallback160;
       audio.load();
       if (isPlaying) audio.play().catch(() => {});
       return;
-    } else if (currentTrack.url.includes('_160.mp4')) {
-      const fallback96 = currentTrack.url.replace('_160.mp4', '_96.mp4');
+    }
+
+    // Stage 1: Step down from 160kbps to 96kbps
+    if (stage <= 1 && (originalUrl.includes('_320.mp4') || originalUrl.includes('_160.mp4'))) {
+      const fallback96 = originalUrl.replace(/_(?:320|160)\.mp4/, '_96.mp4');
+      setCurrentTrack(prev => ({ ...prev, url: fallback96, originalUrl }));
       audio.src = fallback96;
       audio.load();
       if (isPlaying) audio.play().catch(() => {});
       return;
     }
 
-    // Auto-advance if stream is completely unreachable
+    // Stage 2: Direct CDN blocked or unavailable -> Route through Backend Proxy Stream
+    if (stage <= 2 && originalUrl && !originalUrl.includes('/api/music/proxy-stream')) {
+      const apiBase = getBackendApiUrl();
+      if (apiBase) {
+        const proxyStreamUrl = `${apiBase}/api/music/proxy-stream?url=${encodeURIComponent(originalUrl)}`;
+        setCurrentTrack(prev => ({ ...prev, url: proxyStreamUrl, originalUrl }));
+        audio.src = proxyStreamUrl;
+        audio.load();
+        if (isPlaying) audio.play().catch(() => {});
+        return;
+      }
+    }
+
+    // Stage 3: Transparent YouTube Auto-Healing (seamlessly switch to YouTube audio stream)
+    if (stage <= 3) {
+      try {
+        let ytId = currentTrack.youtubeId;
+        if (!ytId) {
+          const apiBase = getBackendApiUrl();
+          const endpoints = [];
+          if (apiBase) endpoints.push(`${apiBase}/api/music/youtube-search?q=${encodeURIComponent(currentTrack.title + ' ' + currentTrack.artist)}`);
+          endpoints.push(`https://secret-bubble-backend.onrender.com/api/music/youtube-search?q=${encodeURIComponent(currentTrack.title + ' ' + currentTrack.artist)}`);
+
+          for (const ep of endpoints) {
+            try {
+              const res = await fetch(ep);
+              if (res.ok) {
+                const data = await res.json();
+                if (data?.results?.[0]?.youtubeId) {
+                  ytId = data.results[0].youtubeId;
+                  break;
+                }
+              }
+            } catch (err) {}
+          }
+        }
+
+        if (ytId) {
+          console.log(`[Audio Recovery] Auto-healed "${currentTrack.title}" using YouTube stream (${ytId})`);
+          if (audio) {
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
+          }
+          setCurrentTrack(prev => ({
+            ...prev,
+            url: null,
+            youtubeId: ytId,
+            isYoutube: true,
+            isAudioStream: false
+          }));
+          setIsPlaying(true);
+          return;
+        }
+      } catch (healingErr) {
+        console.error('[Audio Recovery] YouTube auto-healing failed:', healingErr);
+      }
+    }
+
+    // Stage 4: If all recovery tiers fail, notify user and smoothly play next song
+    console.warn(`[Audio Recovery] All recovery tiers exhausted for "${currentTrack.title}". Moving to next track.`);
+    setTasteFeedback({
+      type: 'info',
+      message: `"${currentTrack.title}" is currently unavailable. Playing next track...`
+    });
     setTimeout(() => {
-      handleNextTrack();
-    }, 1200);
+      setTasteFeedback(null);
+    }, 3000);
+    setTimeout(() => {
+      handleNextTrack(false);
+    }, 900);
   };
 
   const handleAudioWaiting = () => {
@@ -2067,6 +2170,16 @@ export default function StealthMusicPlayer({
         Notification.requestPermission().catch(() => {});
       }
     }
+
+    // Direct synchronous play/pause on audio element for instant user-gesture compliance
+    if (currentTrack?.url && audioRef.current) {
+      if (nextPlay) {
+        audioRef.current.play().catch(err => console.warn('Audio play toggle caught:', err));
+      } else {
+        audioRef.current.pause();
+      }
+    }
+
     if (currentTrack?.isYoutube && iframeRef.current?.contentWindow) {
       try {
         const cmd = nextPlay ? 'playVideo' : 'pauseVideo';
@@ -2435,29 +2548,71 @@ export default function StealthMusicPlayer({
 
   const playTrackNow = (track) => {
     if (!track) return;
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-    }
-    if (iframeRef.current?.contentWindow) {
-      try {
-        iframeRef.current.contentWindow.postMessage(
-          JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
-          '*'
-        );
-      } catch (e) {}
-    }
+
+    audioRecoveryAttemptRef.current = { trackId: track.id, step: 0 };
     currentTrackStartTimeRef.current = Date.now();
     hasLoggedListenRef.current = false;
     logMusicTelemetry(track);
     setCurrentTrack(track);
     setCurrentTime(0);
+
     setTracks(prev => {
       const idx = prev.findIndex(t => t.id === track.id || (t.title === track.title && t.artist === track.artist));
       if (idx !== -1) return prev;
       return [track, ...prev];
     });
     setIsPlaying(true);
+
+    // Direct synchronous user-gesture playback to bypass mobile autoplay blocks
+    if (track.url && audioRef.current) {
+      audioRef.current.src = track.url;
+      audioRef.current.muted = isMuted;
+      audioRef.current.volume = isMuted ? 0 : volume / 100;
+      audioRef.current.load();
+      audioRef.current.play().catch(err => {
+        console.warn('Direct user gesture play caught:', err);
+      });
+      if (iframeRef.current?.contentWindow) {
+        try {
+          iframeRef.current.contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
+            '*'
+          );
+        } catch (e) {}
+      }
+    } else if (track.isYoutube && track.youtubeId) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.removeAttribute('src');
+        audioRef.current.load();
+      }
+      if (iframeRef.current?.contentWindow) {
+        try {
+          iframeRef.current.contentWindow.postMessage(
+            JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
+            '*'
+          );
+        } catch (e) {}
+      }
+    } else if (!track.url && !track.youtubeId) {
+      // Auto-heal songs missing stream URL and youtubeId
+      const q = `${track.title} ${track.artist}`;
+      const apiBase = getBackendApiUrl();
+      fetch(`${apiBase}/api/music/youtube-search?q=${encodeURIComponent(q)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data?.results?.[0]?.youtubeId) {
+            const ytId = data.results[0].youtubeId;
+            setCurrentTrack(prev => ({
+              ...prev,
+              youtubeId: ytId,
+              isYoutube: true,
+              isAudioStream: false
+            }));
+          }
+        })
+        .catch(() => {});
+    }
   };
 
   const handleResumeSession = () => {
@@ -2676,10 +2831,7 @@ export default function StealthMusicPlayer({
 
     setTracks(playlistSongs);
     if (playlistSongs[0]) {
-      logMusicTelemetry(playlistSongs[0]);
-      setCurrentTrack(playlistSongs[0]);
-      setCurrentTime(0);
-      setIsPlaying(true);
+      playTrackNow(playlistSongs[0]);
     }
   };
 
@@ -3220,7 +3372,6 @@ export default function StealthMusicPlayer({
       <audio
         ref={audioRef}
         preload="auto"
-        crossOrigin="anonymous"
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onEnded={handleTrackEnded}
@@ -3242,7 +3393,7 @@ export default function StealthMusicPlayer({
       )}
 
       {/* Persistent YouTube Audio/Video Frame for YouTube stream tracks */}
-      {currentTrack.isYoutube && (
+      {currentTrack.isYoutube && currentTrack.youtubeId && (
         <div 
           style={
             showVideoMode
@@ -3256,14 +3407,23 @@ export default function StealthMusicPlayer({
                     height: `${canvasSlotRect.height}px`,
                     zIndex: 20
                   }
-                : undefined
+                : {
+                    position: 'fixed',
+                    left: '-9999px',
+                    top: '0px',
+                    width: '320px',
+                    height: '180px',
+                    opacity: 1,
+                    pointerEvents: 'none',
+                    zIndex: -50
+                  }
           }
           className={
             showVideoMode 
               ? "fixed inset-0 z-50 bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200" 
               : (viewMode === 'nowPlaying' && canvasMode === 'canvas' && canvasSlotRect)
                 ? "rounded-2xl overflow-hidden shadow-2xl border border-white/20 bg-black group"
-                : "fixed top-0 left-0 w-2 h-2 opacity-[0.001] pointer-events-none overflow-hidden -z-50"
+                : "fixed pointer-events-none overflow-hidden"
           }
         >
           {showVideoMode ? (
