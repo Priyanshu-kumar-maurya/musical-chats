@@ -1921,39 +1921,52 @@ app.get('/api/music/feed', async (req, res) => {
     topics = customTopics;
   }
 
-  // Consistent session seed provided by client, or randomized on page 1
-  const clientSeed = parseInt(req.query.seed, 10);
-  const baseSeed = !isNaN(clientSeed) ? Math.abs(clientSeed) : (page === 1 ? Math.floor(Math.random() * topics.length) : 0);
+  const isFresh = req.query.fresh === '1' || req.query.fresh === 'true';
+  const excludeKeys = (req.query.excludeKeys || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-  // Multi-Topic Spotify-Style Blending:
-  // Instead of querying 1 narrow topic for all songs, blend TWO complementary topics concurrently per page!
-  const topicIdxA = (baseSeed + (page - 1) * 2) % topics.length;
-  const topicIdxB = (baseSeed + (page - 1) * 2 + 1) % topics.length;
+  // Consistent session seed provided by client, or randomized on fresh reload
+  const clientSeed = parseInt(req.query.seed, 10);
+  const baseSeed = !isNaN(clientSeed) ? Math.abs(clientSeed) : Math.floor(Math.random() * topics.length * 100);
+
+  // Multi-Topic Spotify/YouTube-Style 3-Topic Blending:
+  // Instead of querying 1 narrow topic, blend THREE complementary topics concurrently per batch!
+  const topicIdxA = (baseSeed * 3 + (page - 1) * 2) % topics.length;
+  const topicIdxB = (baseSeed * 7 + (page - 1) * 2 + 1) % topics.length;
+  const topicIdxC = (baseSeed * 11 + (page - 1) * 2 + 2) % topics.length;
   const topicA = req.query.topic || topics[topicIdxA];
   const topicB = topics[topicIdxB];
-  const queryPage = Math.floor((page - 1) / Math.max(1, Math.floor(topics.length / 2))) + 1;
+  const topicC = topics[topicIdxC];
+
+  // On fresh reload, dynamically vary the catalog page offset (p=1, 2, 3, 4) to ensure completely new songs
+  const qPageA = isFresh ? ((baseSeed % 4) + 1) : (Math.floor((page - 1) / Math.max(1, Math.floor(topics.length / 2))) + 1);
+  const qPageB = isFresh ? (((baseSeed + 1) % 4) + 1) : qPageA;
+  const qPageC = isFresh ? (((baseSeed + 2) % 4) + 1) : qPageA;
 
   try {
-    // Query two distinct broad compilations simultaneously (18 tracks each)
-    const searchUrlA = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topicA)}&p=${queryPage}&n=18&ctx=android&_format=json`;
-    const searchUrlB = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topicB)}&p=${queryPage}&n=18&ctx=android&_format=json`;
+    // Query three distinct broad compilations simultaneously (15 tracks each)
+    const searchUrlA = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topicA)}&p=${qPageA}&n=15&ctx=android&_format=json`;
+    const searchUrlB = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topicB)}&p=${qPageB}&n=15&ctx=android&_format=json`;
+    const searchUrlC = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topicC)}&p=${qPageC}&n=15&ctx=android&_format=json`;
 
     const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
 
-    const [resA, resB] = await Promise.all([
+    const [resA, resB, resC] = await Promise.all([
       fetch(searchUrlA, { headers }).then(r => r.json()).catch(() => ({ results: [] })),
-      fetch(searchUrlB, { headers }).then(r => r.json()).catch(() => ({ results: [] }))
+      fetch(searchUrlB, { headers }).then(r => r.json()).catch(() => ({ results: [] })),
+      fetch(searchUrlC, { headers }).then(r => r.json()).catch(() => ({ results: [] }))
     ]);
 
     const songsA = resA.results || [];
     const songsB = resB.results || [];
+    const songsC = resC.results || [];
 
-    // Interleave the two topics evenly: A1, B1, A2, B2...
+    // Interleave the three topics evenly: A1, B1, C1, A2, B2, C2...
     const blendedRaw = [];
-    const maxLen = Math.max(songsA.length, songsB.length);
+    const maxLen = Math.max(songsA.length, songsB.length, songsC.length);
     for (let i = 0; i < maxLen; i++) {
       if (songsA[i]) blendedRaw.push(songsA[i]);
       if (songsB[i]) blendedRaw.push(songsB[i]);
+      if (songsC[i]) blendedRaw.push(songsC[i]);
     }
 
     const results = [];
@@ -1967,11 +1980,17 @@ app.get('/api/music/feed', async (req, res) => {
             const rawTitle = cleanHtml(s.song || s.title);
             const rawArtist = cleanHtml(s.primary_artists || s.singers || s.more_info?.primary_artists || 'Online Music');
 
-            // Intra-batch deduplication: avoid multiple versions of the same track in one batch
+            // Intra-batch deduplication
             const fp = getFeedFingerprint(rawTitle, rawArtist);
             if (fp && seenBatchKeys.has(fp)) {
               continue;
             }
+
+            // Exclude songs already shown in the previous batch on refresh
+            if (fp && excludeKeys.length > 0 && excludeKeys.some(ek => fp.includes(ek) || ek.includes(fp))) {
+              continue;
+            }
+
             if (fp) {
               seenBatchKeys.add(fp);
             }
@@ -2041,6 +2060,12 @@ app.get('/api/music/feed', async (req, res) => {
           score -= 50;
         }
       });
+
+      // YouTube-style Exploration Jitter on fresh reloads (+/- 14 pts)
+      if (isFresh) {
+        const jitter = (Math.random() * 28) - 14;
+        score += jitter;
+      }
 
       return { item, score };
     });

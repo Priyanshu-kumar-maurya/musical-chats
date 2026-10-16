@@ -629,7 +629,17 @@ export default function StealthMusicPlayer({
   const sentinelRef = useRef(null);
   const listScrollRef = useRef(null);
   const seenSongKeysRef = useRef(new Set(tracks.map(t => getSongFingerprint(t.title, t.artist)).filter(Boolean)));
-  const feedSessionSeedRef = useRef(Math.floor(Math.random() * 10000));
+  const feedSessionSeedRef = useRef(Math.floor(Math.random() * 100000));
+  const tracksRef = useRef(tracks);
+  useEffect(() => {
+    tracksRef.current = tracks;
+  }, [tracks]);
+
+  // YouTube-Style Pull to Refresh States
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isPulling, setIsPulling] = useState(false);
+  const touchStartYRef = useRef(0);
+  const isPullingTouchRef = useRef(false);
 
   // YouTube Playlist Import States
   const [showImportYoutubeModal, setShowImportYoutubeModal] = useState(false);
@@ -2891,7 +2901,7 @@ export default function StealthMusicPlayer({
     setIsFeedRefreshing(true);
     try {
       if (replace) {
-        feedSessionSeedRef.current = Math.floor(Math.random() * 10000);
+        feedSessionSeedRef.current = Math.floor(Math.random() * 100000);
         seenSongKeysRef.current.clear();
       }
 
@@ -2903,6 +2913,15 @@ export default function StealthMusicPlayer({
 
       // Compute taste affinity params with session seed
       let params = `genre=${encodeURIComponent(effectiveGenre)}&page=1&fresh=1&seed=${feedSessionSeedRef.current}`;
+
+      // When reloading/replacing feed, pass currently displayed song keys so backend strictly excludes them
+      if (replace && tracksRef.current && tracksRef.current.length > 0) {
+        const currentKeys = tracksRef.current.slice(0, 25).map(t => getSongFingerprint(t.title, t.artist)).filter(Boolean);
+        if (currentKeys.length > 0) {
+          params += `&excludeKeys=${encodeURIComponent(currentKeys.join(','))}`;
+        }
+      }
+
       if (tasteProfile) {
         const likedG = Object.entries(tasteProfile.genres || {})
           .filter(([_, score]) => score > 1)
@@ -2987,6 +3006,17 @@ export default function StealthMusicPlayer({
           } catch {}
 
           setFeedPage(1);
+
+          if (replace) {
+            listScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+            setTasteFeedback({
+              type: 'listen',
+              message: '✨ Feed updated with fresh songs'
+            });
+            setTimeout(() => {
+              setTasteFeedback(null);
+            }, 3000);
+          }
         }
       }
     } catch (e) {
@@ -2996,11 +3026,57 @@ export default function StealthMusicPlayer({
           .filter(t => calculateTrackRelevance(t, tasteProfile, likedSongIds) > -45)
           .sort(() => Math.random() - 0.5);
         setTracks(shuffled.length > 0 ? shuffled : pool);
+        setTasteFeedback({
+          type: 'listen',
+          message: '✨ Feed updated with fresh songs'
+        });
+        setTimeout(() => setTasteFeedback(null), 3000);
       }
     } finally {
       setIsFeedRefreshing(false);
     }
   }, [selectedGenre, userTastes, tasteProfile, likedSongIds, getBackendApiUrl, calculateTrackRelevance]);
+
+  // Touch gesture handlers for mobile YouTube-style pull-to-refresh
+  const handleTouchStart = useCallback((e) => {
+    if (activeTab === 'playlist' && listScrollRef.current && listScrollRef.current.scrollTop <= 2) {
+      touchStartYRef.current = e.touches[0].clientY;
+      isPullingTouchRef.current = true;
+    } else {
+      isPullingTouchRef.current = false;
+    }
+  }, [activeTab]);
+
+  const handleTouchMove = useCallback((e) => {
+    if (!isPullingTouchRef.current || isFeedRefreshing) return;
+    if (listScrollRef.current && listScrollRef.current.scrollTop <= 2) {
+      const currentY = e.touches[0].clientY;
+      const diffY = currentY - touchStartYRef.current;
+      if (diffY > 0) {
+        const distance = Math.min(85, diffY * 0.42);
+        setPullDistance(distance);
+        setIsPulling(true);
+      }
+    }
+  }, [isFeedRefreshing]);
+
+  const handleTouchEnd = useCallback(() => {
+    if (isPullingTouchRef.current) {
+      isPullingTouchRef.current = false;
+      if (pullDistance >= 50 && !isFeedRefreshing) {
+        setPullDistance(55);
+        setIsPulling(false);
+        fetchDynamicFeed(selectedGenre, true).finally(() => {
+          setTimeout(() => {
+            setPullDistance(0);
+          }, 350);
+        });
+      } else {
+        setPullDistance(0);
+        setIsPulling(false);
+      }
+    }
+  }, [pullDistance, isFeedRefreshing, fetchDynamicFeed, selectedGenre]);
 
   // Handle genre filter chip click
   const handleGenreChange = (genreId) => {
@@ -4091,8 +4167,40 @@ export default function StealthMusicPlayer({
           <div
             ref={listScrollRef}
             onScroll={handleContainerScroll}
-            className="flex-1 overflow-y-auto px-4 sm:px-8 pt-2 pb-28 space-y-6"
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            className="flex-1 overflow-y-auto px-4 sm:px-8 pt-2 pb-28 space-y-6 relative overscroll-contain"
           >
+            {/* YouTube-Style Pull-To-Refresh Indicator Badge */}
+            {(pullDistance > 0 || isFeedRefreshing) && (
+              <div
+                className="flex items-center justify-center overflow-hidden transition-all duration-200 pointer-events-none sticky top-1 z-30 py-1"
+                style={{
+                  height: `${Math.max(pullDistance, isFeedRefreshing ? 48 : 0)}px`,
+                  opacity: Math.min(1, Math.max(0.2, (pullDistance / 40) || (isFeedRefreshing ? 1 : 0)))
+                }}
+              >
+                <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#212121]/95 text-white shadow-2xl border border-white/10 text-xs font-semibold backdrop-blur-md">
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 text-[#1ed760] ${
+                      isFeedRefreshing ? 'animate-spin' : ''
+                    }`}
+                    style={{
+                      transform: isFeedRefreshing ? 'none' : `rotate(${pullDistance * 4.5}deg)`
+                    }}
+                  />
+                  <span>
+                    {isFeedRefreshing
+                      ? 'Loading fresh songs...'
+                      : pullDistance >= 50
+                        ? 'Release to refresh'
+                        : 'Pull to refresh'}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* TAB 0: Spotify Home Feed */}
             {activeTab === 'playlist' && (
               <div className="space-y-6">
@@ -4386,13 +4494,16 @@ export default function StealthMusicPlayer({
                     })}
 
                     <button
-                      onClick={() => fetchDynamicFeed(selectedGenre, true)}
+                      onClick={() => {
+                        listScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                        fetchDynamicFeed(selectedGenre, true);
+                      }}
                       disabled={isFeedRefreshing}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs bg-[#242424] hover:bg-[#333] text-[#b3b3b3] hover:text-[#1ed760] transition ml-auto shrink-0 disabled:opacity-50 cursor-pointer"
-                      title="Refresh feed with new songs"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-[#242424] hover:bg-[#333] text-white hover:text-[#1ed760] transition ml-auto shrink-0 disabled:opacity-50 cursor-pointer border border-white/5 active:scale-95"
+                      title="Refresh feed with fresh songs"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isFeedRefreshing ? 'animate-spin text-[#1ed760]' : ''}`} />
-                      <span className="hidden sm:inline text-[11px]">Refresh</span>
+                      <span className="text-[11px] font-bold">Refresh</span>
                     </button>
                   </div>
 
@@ -4421,6 +4532,13 @@ export default function StealthMusicPlayer({
                     </div>
                     <span className="text-xs text-[#b3b3b3] font-mono">{tracks.length} tracks</span>
                   </div>
+
+                  {/* YouTube-Style Shimmer Progress Bar when refreshing */}
+                  {isFeedRefreshing && (
+                    <div className="h-0.5 w-full bg-[#282828] overflow-hidden rounded-full my-1.5 relative">
+                      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-[#1ed760] to-transparent animate-pulse w-full" />
+                    </div>
+                  )}
 
                   {/* Spotify Tracklist Table Header */}
                   <div className="grid grid-cols-12 text-[11px] font-semibold text-[#b3b3b3] px-3 py-2 border-b border-[#282828] uppercase tracking-wider">
