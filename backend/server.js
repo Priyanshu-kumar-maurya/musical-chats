@@ -1583,6 +1583,53 @@ app.get('/api/music/suggestions', async (req, res) => {
   }
 });
 
+// =========================================================================
+// High-Speed In-Memory LRU Cache for Instant Music Search & Feed
+// =========================================================================
+const MUSIC_SEARCH_CACHE = new Map();
+const MUSIC_SEARCH_CACHE_MAX = 600;
+const MUSIC_SEARCH_TTL = 15 * 60 * 1000; // 15 minutes
+
+function getMusicSearchCache(key) {
+  const item = MUSIC_SEARCH_CACHE.get(key);
+  if (!item) return null;
+  if (Date.now() - item.ts > MUSIC_SEARCH_TTL) {
+    MUSIC_SEARCH_CACHE.delete(key);
+    return null;
+  }
+  return item.data;
+}
+
+function setMusicSearchCache(key, data) {
+  if (MUSIC_SEARCH_CACHE.size >= MUSIC_SEARCH_CACHE_MAX) {
+    const oldestKey = MUSIC_SEARCH_CACHE.keys().next().value;
+    MUSIC_SEARCH_CACHE.delete(oldestKey);
+  }
+  MUSIC_SEARCH_CACHE.set(key, { data, ts: Date.now() });
+}
+
+const MUSIC_FEED_CACHE = new Map();
+const MUSIC_FEED_CACHE_MAX = 400;
+const MUSIC_FEED_TTL = 8 * 60 * 1000; // 8 minutes
+
+function getMusicFeedCache(key) {
+  const item = MUSIC_FEED_CACHE.get(key);
+  if (!item) return null;
+  if (Date.now() - item.ts > MUSIC_FEED_TTL) {
+    MUSIC_FEED_CACHE.delete(key);
+    return null;
+  }
+  return item.data;
+}
+
+function setMusicFeedCache(key, data) {
+  if (MUSIC_FEED_CACHE.size >= MUSIC_FEED_CACHE_MAX) {
+    const oldestKey = MUSIC_FEED_CACHE.keys().next().value;
+    MUSIC_FEED_CACHE.delete(oldestKey);
+  }
+  MUSIC_FEED_CACHE.set(key, { data, ts: Date.now() });
+}
+
 // Unified Audio Search: Returns direct audio streams for continuous background playback with pagination
 app.get('/api/music/search', async (req, res) => {
   const q = (req.query.q || '').trim();
@@ -1593,11 +1640,19 @@ app.get('/api/music/search', async (req, res) => {
     return res.json({ success: true, page, total: 0, results: [], hasMore: false });
   }
 
+  // Fast In-Memory Cache Lookup (Sub-millisecond instant search response)
+  const cacheKey = `search_${q.toLowerCase()}_p${page}_l${limit}`;
+  const cached = getMusicSearchCache(cacheKey);
+  if (cached) {
+    return res.json(cached);
+  }
+
   try {
     // 1. Primary: JioSaavn real paged search API (returns 25 high-quality tracks with direct media URLs)
     const searchUrl = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(q)}&p=${page}&n=${limit}&ctx=android&_format=json`;
     const saavnRes = await fetch(searchUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout ? AbortSignal.timeout(4500) : undefined
     });
     const data = await saavnRes.json();
     const songs = data.results || [];
@@ -1642,14 +1697,16 @@ app.get('/api/music/search', async (req, res) => {
     // 2. If search.getResults returned playable audio tracks, return them immediately
     if (results.length > 0) {
       const hasMore = totalResults ? (page * limit < totalResults) : (results.length >= limit);
-      return res.json({
+      const payload = {
         success: true,
         page,
         total: totalResults || results.length,
         results,
         hasMore,
         source: 'direct-audio'
-      });
+      };
+      setMusicSearchCache(cacheKey, payload);
+      return res.json(payload);
     }
 
     // 3. Fallback on page 1 to autocomplete if search.getResults yielded nothing
@@ -1701,7 +1758,9 @@ app.get('/api/music/search', async (req, res) => {
       }
 
       if (results.length > 0) {
-        return res.json({ success: true, page: 1, total: results.length, results, hasMore: false, source: 'autocomplete-fallback' });
+        const payload = { success: true, page: 1, total: results.length, results, hasMore: false, source: 'autocomplete-fallback' };
+        setMusicSearchCache(cacheKey, payload);
+        return res.json(payload);
       }
 
       // Fallback to YouTube scraper on page 1 if no direct audio was found
@@ -1760,7 +1819,7 @@ function hasArtistOverlap(keysA, keysB) {
 
 // Spotify/YouTube-style Diversity Interleaver:
 // Caps max songs per artist/composer and separates them so no two adjacent songs share an artist or composer
-function disperseArtistsAndComposers(songs, maxSameArtistTotal = 2) {
+function disperseArtistsAndComposers(songs, maxSameArtistTotal = 4) {
   if (!songs || songs.length <= 1) return songs;
 
   const artistFreq = new Map();
@@ -1795,64 +1854,103 @@ function disperseArtistsAndComposers(songs, maxSameArtistTotal = 2) {
   return result;
 }
 
-// Expansive Dynamic Genre Feed Topics: Broad Multi-Artist Compilations Only (Strictly No Single-Composer Clumping)
+// Expansive Dynamic Genre Feed Topics: Comprehensive High-Yield Artist & Catalog Compilations
 const GENRE_FEED_TOPICS = {
   all: [
-    'Trending Hindi Hits 2026', 'Bollywood Romantic Melodies', 'Global Pop Chartbusters',
-    'Punjabi Top 50 Hits', 'Lofi Hindi Chill Beats', '90s Romantic Bollywood Duets',
-    '2000s Nostalgic Hindi Melodies', 'Bollywood All Time Chartbusters', 'Indian Indie Pop Radio',
-    'Bollywood Acoustic & Unplugged', 'Soulful Hindi Love Anthems', 'Bollywood Dance Party Anthems',
-    'Monsoon Bollywood Romance', 'Billboard Hot 100 Radio', 'Slowed and Reverb Hindi Radio',
-    'Bollywood Road Trip Anthems', 'Retro Hindi Golden Hits', 'Sufi & Soul Hindi Melodies',
-    'Punjabi Urban Melodies', 'Midnight Chill Beats Radio', 'Bollywood Blockbusters Hits',
-    'All Time Greatest Bollywood Hits', 'Bollywood Wedding Dance Anthems', 'Heartfelt Bollywood Acoustic',
-    'Top 50 Hindi Global Radio', 'Golden Era Bollywood Classics', 'Desi Hip Hop & Rap Hits',
-    'Bollywood Nostalgia Radio', 'Acoustic Pop & Love Radio', 'Chillout Hindi Vibes'
+    'Trending Hindi Hits 2026', 'Arijit Singh', 'Pritam', 'Sidhu Moose Wala',
+    'Karan Aujla', 'Diljit Dosanjh', 'Atif Aslam', 'Shreya Ghoshal',
+    'AP Dhillon', 'Shubh', 'Ammy Virk', 'B Praak', 'KK Hits',
+    'The Weeknd', 'Taylor Swift', 'Ed Sheeran', 'Drake', 'Bruno Mars',
+    'Sonu Nigam', 'Mohit Chauhan', 'Armaan Malik', 'Jubin Nautiyal',
+    'Vishal Mishra', 'Darshan Raval', 'Anuv Jain', 'Prateek Kuhad',
+    'Guru Randhawa', 'Jass Manak', 'Mankirt Aulakh', 'Parmish Verma',
+    'Coldplay', 'Imagine Dragons', 'Dua Lipa', 'Justin Bieber',
+    'Bollywood Romantic Hits', '90s Bollywood Hits', '2000s Bollywood Hits',
+    'Punjabi Top 50', 'Latest Punjabi Songs 2026', 'Bhangra Hits',
+    'Hindi Lofi Chill', 'Slowed Reverb Hindi', 'Acoustic Chill Hindi',
+    'A.R. Rahman', 'Sachin Jigar', 'Mithoon', 'Amit Trivedi',
+    'Billie Eilish', 'Charlie Puth', 'Post Malone', 'Alan Walker',
+    'Arjan Dhillon', 'Tegi Pannu', 'Kaka', 'Bohemia', 'Honey Singh',
+    'Badshah', 'Nimrat Khaira', 'Sunanda Sharma', 'Babbu Maan',
+    'Gippy Grewal', 'Satinder Sartaaj', 'Prabh Gill', 'Wazir Patar'
   ],
   hindi: [
-    'Latest Bollywood Hits 2026', 'Bollywood Romantic Melodies', '90s Romantic Bollywood Duets',
-    '2000s Nostalgic Hindi Hits', '2010s Bollywood Superhits', 'Bollywood All Time Chartbusters',
-    'Soulful Hindi Love Anthems', 'Bollywood Acoustic Unplugged', 'Bollywood Road Trip Songs',
-    'Hindi Indie Pop Radio', 'Bollywood Dance Anthems', 'Monsoon Love Songs Bollywood',
-    'Bollywood Golden Retro Hits', 'Sufi & Soul Hindi Classics', 'Heartbreak & Healing Hindi Songs',
-    'All Time Greatest Hindi Duets', 'Midnight Hindi Melodies', 'Bollywood Evergreen Classics',
-    'Bollywood Blockbuster Soundtracks', 'Unplugged Bollywood Love', 'Bollywood College Nostalgia',
-    'Top 50 Hindi Radio Hits', 'Hindi Acoustic Cafe', 'Bollywood Sufi Rock Anthems'
+    'Latest Hindi Hits 2026', 'Arijit Singh', 'Pritam', 'Atif Aslam',
+    'Shreya Ghoshal', 'KK', 'Sonu Nigam', 'Mohit Chauhan', 'Armaan Malik',
+    'Jubin Nautiyal', 'Vishal Mishra', 'Darshan Raval', 'Anuv Jain',
+    'Prateek Kuhad', 'B Praak Hindi', 'A.R. Rahman', 'Sachin Jigar',
+    'Shankar Ehsaan Loy', 'Mithoon', 'Amit Trivedi', 'Neha Kakkar',
+    'Sunidhi Chauhan', 'Kumar Sanu', 'Udit Narayan', 'Alka Yagnik',
+    'Kishore Kumar', 'Lata Mangeshkar', 'R.D. Burman', 'Mohammed Rafi',
+    'Mukesh', 'Jagjit Singh', 'Lucky Ali', 'Shaan', 'Kavita Krishnamurthy',
+    'Asha Bhosle', 'Rahat Fateh Ali Khan', 'Sachet Tandon', 'Tulsi Kumar',
+    'Monali Thakur', 'Papon', 'Mika Singh', 'Himesh Reshammiya', 'Badshah',
+    'Yo Yo Honey Singh', 'Hindi Indie Pop', 'Bollywood Romantic Hits',
+    '90s Bollywood Hits', '2000s Bollywood Hits', '2010s Bollywood Superhits',
+    'Bollywood Acoustic Unplugged', 'Bollywood Dance Anthems'
   ],
   bollywood: [
-    'Bollywood Blockbusters 2026', 'Bollywood Romantic Melodies', 'Trending Bollywood Dance Hits',
-    '90s Romantic Bollywood Duets', '2000s Bollywood Romance', '2010s Bollywood Dance Party',
-    'Bollywood Wedding Anthems', 'Bollywood Rain Romance', 'Bollywood College Nostalgia',
-    'Bollywood Unplugged Acoustic', 'Bollywood Sufi Hits', 'Bollywood All Time Chartbusters',
-    'Yash Raj Films Evergreen Songs', 'Dharma Productions Hits', 'Bollywood Road Trip Anthems',
-    'Retro Bollywood Disco Hits', 'Bollywood Soulful Ballads', 'Bollywood Golden Era Melodies'
+    'Bollywood Blockbusters 2026', 'Arijit Singh Bollywood', 'Pritam Bollywood',
+    'Atif Aslam Bollywood', 'Shreya Ghoshal Hits', 'KK Bollywood Melodies',
+    'Sonu Nigam Bollywood', 'A.R. Rahman Bollywood', 'Vishal Shekhar',
+    'Sachin Jigar', 'Mithoon Bollywood', 'Shankar Ehsaan Loy',
+    'Amit Trivedi Bollywood', 'Jubin Nautiyal Hits', 'Darshan Raval Hits',
+    '90s Bollywood Duets', '2000s Bollywood Hits', '2010s Bollywood Hits',
+    'Bollywood Romantic Hits', 'Bollywood Dance Party', 'Bollywood Wedding Hits',
+    'Yash Raj Films Songs', 'Dharma Productions Hits', 'T-Series Mega Hits',
+    'Bollywood Sufi Hits', 'Bollywood Evergreen Classics', 'Bollywood Acoustic',
+    'Mohit Chauhan Hits', 'Armaan Malik Bollywood', 'Sunidhi Chauhan Dance Hits',
+    'Kumar Sanu Alka Yagnik', 'Udit Narayan Hits', 'Kishore Kumar Classics',
+    'Lata Mangeshkar Duets', 'Bollywood Rain Songs', 'Bollywood Road Trip Songs'
   ],
   punjabi: [
-    'Latest Punjabi Hits 2026', 'Top Punjabi Bangers Radio', 'Punjabi Chartbusters 2026',
-    'Punjabi Pop & Folk Hits', 'Urban Punjabi Melodies', 'Punjabi Dance Party Hits',
-    'Desi Punjabi Anthems', 'Punjabi Acoustic Melodies', 'Sufi Punjabi Radio',
-    'Punjabi Love Ballads', 'Punjabi Club Bangers', 'Bhangra Dance Hits',
-    'Punjabi Folk & Beats', 'Punjabi Chill Melodies'
+    'Punjabi Hits', 'Sidhu Moose Wala', 'Karan Aujla', 'Diljit Dosanjh',
+    'AP Dhillon', 'Shubh', 'Ammy Virk', 'B Praak', 'Harrdy Sandhu',
+    'Guru Randhawa', 'Jass Manak', 'Mankirt Aulakh', 'Parmish Verma',
+    'Jordan Sandhu', 'Amrit Maan', 'Gurnam Bhullar', 'Nirvair Pannu',
+    'Arjan Dhillon', 'Tegi Pannu', 'Kaka', 'Bohemia', 'Badshah Punjabi',
+    'Honey Singh Punjabi', 'Prem Dhillon', 'Nimrat Khaira', 'Sunanda Sharma',
+    'Baani Sandhu', 'Jassie Gill', 'Babbu Maan', 'Gippy Grewal', 'Gurdas Maan',
+    'Satinder Sartaaj', 'Prabh Gill', 'Maninder Buttar', 'Ranjit Bawa',
+    'Garry Sandhu', 'Tarsem Jassar', 'Wazir Patar', 'Kuldeep Manak',
+    'Jasmine Sandlas', 'PropheC', 'Chani Nattan', 'Cheema Y', 'Mickey Singh',
+    'Pav Dharia', 'Mani Longia', 'Gur Sidhu', 'Avvy Sra', 'Latest Punjabi Songs 2026',
+    'Punjabi Top 50', 'Punjabi Dance Hits', 'Punjabi Romantic Hits', 'Bhangra Hits'
   ],
   english: [
-    'Top English Hits 2026', 'Global Pop Hits', 'Billboard Hot 100',
-    'Acoustic Pop Hits Radio', 'Synthwave & Pop Hits', 'Chill Pop Hits',
-    'Alt Pop & Indie Hits', 'Classic Rock & Pop Anthems', 'EDM & Dance Pop Hits',
-    'Heartfelt English Ballads', 'Indie Rock Radio', 'Global Chartbusters Radio'
+    'Top Global Hits 2026', 'Billboard Hot 100', 'Taylor Swift', 'The Weeknd',
+    'Ed Sheeran', 'Drake', 'Bruno Mars', 'Dua Lipa', 'Justin Bieber',
+    'Ariana Grande', 'Post Malone', 'Billie Eilish', 'Harry Styles',
+    'Coldplay', 'Imagine Dragons', 'Maroon 5', 'Charlie Puth', 'Shawn Mendes',
+    'Adele', 'Katy Perry', 'Rihanna', 'Eminem', 'Kendrick Lamar',
+    'Travis Scott', 'Olivia Rodrigo', 'Sam Smith', 'Sia', 'OneRepublic',
+    'Zayn', 'Camila Cabello', 'Selena Gomez', 'Alan Walker', 'Marshmello',
+    'The Chainsmokers', 'David Guetta', 'Calvin Harris', 'Avicii', 'Kygo',
+    'Lady Gaga', 'Beyonce', 'SZA', 'Doja Cat', 'Lana Del Rey', 'Hozier',
+    'Benson Boone', 'Sabrina Carpenter', 'Teddy Swims', 'Global Pop Chartbusters'
   ],
   lofi: [
-    'Lofi Hindi Chill', 'Midnight Chill Beats', 'Slowed and Reverb Hindi Hits',
-    'Lofi Acoustic Study', 'Late Night Beats', 'Rainy Day Hindi Lofi',
-    'Ambient Hindi Chill', 'Nostalgic Hindi Lofi', 'Sad Hindi Lofi',
-    'Cafe Vibe Lofi Chill', 'Sunset Chillhop Hindi', 'Deep Focus Study Beats',
-    'Bollywood Acoustic Lofi', 'Peaceful Piano Chill'
+    'Hindi Lofi Chill', 'Slowed and Reverb Hindi', 'Arijit Singh Lofi',
+    'Midnight Lofi Beats', 'Study Lofi Chill', 'Acoustic Chill Hindi',
+    'Bollywood Lofi Chill', 'Sunset Lofi Beats', 'Rainy Day Hindi Lofi',
+    'Late Night Hindi Chill', 'Sad Hindi Lofi', 'Coffee Shop Lofi',
+    'Night Drive Hindi Lofi', 'Deep Focus Lofi', 'Indie Hindi Lofi',
+    'Anuv Jain Lofi', 'Prateek Kuhad Chill', 'Atif Aslam Lofi',
+    'KK Lofi Chill', 'Darshan Raval Lofi', 'Chillhop Hindi Beats',
+    'Ambient Hindi Chill', 'Peaceful Piano Chill', 'Acoustic Guitar Chill',
+    'Lo-Fi Study Beats', 'Lofi Sleep Beats', 'Dreamy Hindi Lofi',
+    '90s Bollywood Lofi', '2000s Bollywood Lofi', 'Midnight Melodies Lofi'
   ],
   romantic: [
-    'Bollywood Romantic Hits', 'Heartfelt Hindi Melodies', 'Romantic Acoustic Love Hindi',
-    'Monsoon Love Songs Hindi', 'Soulful Hindi Melodies', 'Unplugged Love Melodies Hindi',
-    '90s Romantic Bollywood Duets', '2000s Romantic Hits', 'Duets of Bollywood Romance',
-    'Acoustic Guitar Romance Hindi', 'Melodious Hindi Love Songs', 'Late Night Romance Hindi',
-    'Bollywood Sunset Love Anthems', 'First Love Bollywood Nostalgia'
+    'Bollywood Romantic Hits', 'Arijit Singh Romantic', 'Atif Aslam Love Songs',
+    'Mohit Chauhan Romantic', 'Shreya Ghoshal Love Songs', 'KK Romantic Hits',
+    'Jubin Nautiyal Love', 'Vishal Mishra Romantic', 'Darshan Raval Love Songs',
+    'Armaan Malik Romantic', 'Anuv Jain Romantic', 'Prateek Kuhad Love Songs',
+    'Arijit Pritam Love Duets', '90s Romantic Bollywood Duets', '2000s Romantic Hindi',
+    'Acoustic Romantic Hindi', 'Bollywood Sunset Love Songs', 'Monsoon Love Songs Hindi',
+    'Soulful Hindi Melodies', 'Unplugged Love Melodies', 'Heartfelt Bollywood Acoustic',
+    'Romantic Duets Bollywood', 'Kumar Sanu Alka Yagnik Romantic', 'Udit Narayan Romantic',
+    'Late Night Hindi Romance', 'First Love Bollywood Songs', 'Melodious Hindi Love Songs'
   ]
 };
 
@@ -1886,8 +1984,8 @@ app.get('/api/music/feed', async (req, res) => {
 
     // 1. Add broad top artist radio mixes if available (blended, not single-artist blocks)
     topArtists.slice(0, 3).forEach(artist => {
-      customTopics.push(`${artist} & Similar Artists Radio`);
-      customTopics.push(`Top Hits featuring ${artist}`);
+      customTopics.push(`${artist} Top Hits`);
+      customTopics.push(`${artist}`);
     });
 
     // 2. Add liked genre topics
@@ -1902,7 +2000,7 @@ app.get('/api/music/feed', async (req, res) => {
       customTopics = [...GENRE_FEED_TOPICS.all];
     } else {
       // Blend with general topics for diversity
-      customTopics.push(...GENRE_FEED_TOPICS.all.slice(0, 15));
+      customTopics.push(...GENRE_FEED_TOPICS.all.slice(0, 25));
     }
 
     // 3. Strongly exclude any topic matching skipped genres or skipped artists
@@ -1928,32 +2026,48 @@ app.get('/api/music/feed', async (req, res) => {
   const clientSeed = parseInt(req.query.seed, 10);
   const baseSeed = !isNaN(clientSeed) ? Math.abs(clientSeed) : Math.floor(Math.random() * topics.length * 100);
 
-  // Multi-Topic Spotify/YouTube-Style 3-Topic Blending:
+  // High-Speed In-Memory Feed Cache Check (returns in sub-millisecond for smooth scrolling)
+  const feedCacheKey = `feed_${genre}_p${page}_s${baseSeed}_f${isFresh ? 1 : 0}`;
+  const cachedFeed = getMusicFeedCache(feedCacheKey);
+  if (cachedFeed && !isFresh && excludeKeys.length === 0) {
+    return res.json(cachedFeed);
+  }
+
+  // Multi-Topic Spotify/YouTube-Style Dynamic 3-Topic & Page Offset Cycling:
   // Instead of querying 1 narrow topic, blend THREE complementary topics concurrently per batch!
-  const topicIdxA = (baseSeed * 3 + (page - 1) * 2) % topics.length;
-  const topicIdxB = (baseSeed * 7 + (page - 1) * 2 + 1) % topics.length;
-  const topicIdxC = (baseSeed * 11 + (page - 1) * 2 + 2) % topics.length;
+  const offset = (page - 1) * 3;
+  const topicIdxA = (baseSeed + offset) % topics.length;
+  const topicIdxB = (baseSeed + offset + 1) % topics.length;
+  const topicIdxC = (baseSeed + offset + 2) % topics.length;
   const topicA = req.query.topic || topics[topicIdxA];
   const topicB = topics[topicIdxB];
   const topicC = topics[topicIdxC];
 
-  // On fresh reload, dynamically vary the catalog page offset (p=1, 2, 3, 4) to ensure completely new songs
-  const qPageA = isFresh ? ((baseSeed % 4) + 1) : (Math.floor((page - 1) / Math.max(1, Math.floor(topics.length / 2))) + 1);
-  const qPageB = isFresh ? (((baseSeed + 1) % 4) + 1) : qPageA;
-  const qPageC = isFresh ? (((baseSeed + 2) % 4) + 1) : qPageA;
+  // Dynamically vary catalog page offsets (p=1, 2, 3, 4, 5) per topic as the user scrolls
+  const cycleA = Math.floor((baseSeed + offset) / topics.length);
+  const cycleB = Math.floor((baseSeed + offset + 1) / topics.length);
+  const cycleC = Math.floor((baseSeed + offset + 2) / topics.length);
+
+  const qPageA = isFresh ? ((baseSeed % 5) + 1) : ((cycleA % 5) + 1);
+  const qPageB = isFresh ? (((baseSeed + 1) % 5) + 1) : ((cycleB % 5) + 1);
+  const qPageC = isFresh ? (((baseSeed + 2) % 5) + 1) : ((cycleC % 5) + 1);
 
   try {
-    // Query three distinct broad compilations simultaneously (15 tracks each)
-    const searchUrlA = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topicA)}&p=${qPageA}&n=15&ctx=android&_format=json`;
-    const searchUrlB = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topicB)}&p=${qPageB}&n=15&ctx=android&_format=json`;
-    const searchUrlC = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topicC)}&p=${qPageC}&n=15&ctx=android&_format=json`;
+    // Query three distinct broad compilations simultaneously (18 tracks each for deep catalog)
+    const searchUrlA = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topicA)}&p=${qPageA}&n=18&ctx=android&_format=json`;
+    const searchUrlB = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topicB)}&p=${qPageB}&n=18&ctx=android&_format=json`;
+    const searchUrlC = `https://www.jiosaavn.com/api.php?__call=search.getResults&_marker=0&q=${encodeURIComponent(topicC)}&p=${qPageC}&n=18&ctx=android&_format=json`;
 
     const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
+    const fetchOptions = {
+      headers,
+      signal: AbortSignal.timeout ? AbortSignal.timeout(4500) : undefined
+    };
 
     const [resA, resB, resC] = await Promise.all([
-      fetch(searchUrlA, { headers }).then(r => r.json()).catch(() => ({ results: [] })),
-      fetch(searchUrlB, { headers }).then(r => r.json()).catch(() => ({ results: [] })),
-      fetch(searchUrlC, { headers }).then(r => r.json()).catch(() => ({ results: [] }))
+      fetch(searchUrlA, fetchOptions).then(r => r.json()).catch(() => ({ results: [] })),
+      fetch(searchUrlB, fetchOptions).then(r => r.json()).catch(() => ({ results: [] })),
+      fetch(searchUrlC, fetchOptions).then(r => r.json()).catch(() => ({ results: [] }))
     ]);
 
     const songsA = resA.results || [];
@@ -2080,19 +2194,23 @@ app.get('/api/music/feed', async (req, res) => {
     const candidates = sorted.length > 0 ? sorted : results;
 
     // Apply Spotify-style Diversity Dispersion:
-    // Caps any single artist/composer to max 2 per batch and intersperses them so no two adjacent songs share an artist/composer
-    const dispersedResults = disperseArtistsAndComposers(candidates, 2);
+    // Caps any single artist/composer to max 4 per batch and intersperses them so no two adjacent songs share an artist/composer
+    const dispersedResults = disperseArtistsAndComposers(candidates, 4);
 
     const finalResults = dispersedResults.length > 0 ? dispersedResults : candidates;
 
-    return res.json({
+    const payload = {
       success: true,
       page,
       genre,
       topic: `${topicA} + ${topicB}`,
       results: finalResults,
       hasMore: true
-    });
+    };
+    if (!isFresh && excludeKeys.length === 0) {
+      setMusicFeedCache(feedCacheKey, payload);
+    }
+    return res.json(payload);
   } catch (err) {
     console.error('Music feed error:', err);
     return res.status(500).json({ success: false, error: err.message, results: [] });

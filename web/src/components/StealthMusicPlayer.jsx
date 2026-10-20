@@ -258,8 +258,8 @@ export function hasArtistOverlap(keysA, keysB) {
 }
 
 // Spotify/YouTube-style Diversity Interleaver:
-// Caps any single artist/composer to max 2 in a batch and spaces them apart so no two adjacent songs share an artist/composer
-export function disperseArtistsAndComposers(songs, maxSameArtistTotal = 2) {
+// Caps any single artist/composer to max 4 in a batch and spaces them apart so no two adjacent songs share an artist/composer
+export function disperseArtistsAndComposers(songs, maxSameArtistTotal = 4) {
   if (!songs || songs.length <= 1) return songs;
 
   const artistFreq = new Map();
@@ -1084,6 +1084,7 @@ export default function StealthMusicPlayer({
   const searchSentinelRef = useRef(null);
   const activeSearchQueryRef = useRef('');
   const isSearchingMoreRef = useRef(false);
+  const searchCacheRef = useRef({});
 
   // Live Autocomplete & Typing Suggestions States
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -2260,7 +2261,27 @@ export default function StealthMusicPlayer({
     setSearchPage(1);
     setHasMoreSearch(true);
 
-    // 1. Check if direct YouTube URL was pasted
+    // 1. Instant Cache Check (Sub-millisecond instant search response)
+    if (searchCacheRef.current[query] && Array.isArray(searchCacheRef.current[query]) && searchCacheRef.current[query].length > 0) {
+      setSearchResults(searchCacheRef.current[query]);
+      setIsSearching(false);
+      setHasMoreSearch(true);
+      return;
+    }
+
+    // 2. Instant Local Pre-population (0ms perceived latency so user never stares at empty screen)
+    const catalogPool = [...FEATURED_ONLINE_TRACKS, ...BACKUP_STREAM_POOL, ...tracks];
+    const initialInstantMatches = catalogPool.filter(song => {
+      const t = (song.title || '').toLowerCase();
+      const a = (song.artist || '').toLowerCase();
+      const alb = (song.album || '').toLowerCase();
+      return t.includes(lowerQuery) || a.includes(lowerQuery) || alb.includes(lowerQuery) || lowerQuery.includes(t) || lowerQuery.includes(a);
+    });
+    if (initialInstantMatches.length > 0) {
+      setSearchResults(initialInstantMatches);
+    }
+
+    // 3. Check if direct YouTube URL was pasted
     const ytId = extractYouTubeId(query);
     if (ytId) {
       try {
@@ -2303,25 +2324,18 @@ export default function StealthMusicPlayer({
     }
 
     const fullSongResults = [];
-    const lowerQuery = query.toLowerCase();
 
-    // 2. Fetch from backend endpoints (Local dev, Vercel relative, or Render backend)
+    // 4. Fetch from high-speed backend endpoints
     const candidateEndpoints = [];
     const localBase = getBackendApiUrl();
     if (localBase) {
       candidateEndpoints.push(`${localBase}/api/music/search?q=${encodeURIComponent(query)}&page=1`);
     }
-    const isCapacitor = typeof window !== 'undefined' && (
-      Boolean(window.Capacitor?.isNativePlatform?.()) ||
-      Boolean(window.Capacitor) ||
-      window.location?.protocol === 'capacitor:' ||
-      (window.location?.hostname === 'localhost' && !window.location?.port)
-    );
-    if (!isCapacitor) {
+    if (import.meta.env?.DEV) {
       candidateEndpoints.push(`/api/music/search?q=${encodeURIComponent(query)}&page=1`);
     }
     const defaultCloud = `https://secret-bubble-backend.onrender.com/api/music/search?q=${encodeURIComponent(query)}&page=1`;
-    if (!candidateEndpoints.includes(defaultCloud)) {
+    if (!candidateEndpoints.some(u => u.includes('onrender.com'))) {
       candidateEndpoints.push(defaultCloud);
     }
 
@@ -2330,7 +2344,7 @@ export default function StealthMusicPlayer({
     for (const url of candidateEndpoints) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const timeoutId = setTimeout(() => controller.abort(), 4500);
         const res = await fetch(url, { signal: controller.signal });
         clearTimeout(timeoutId);
         if (res.ok) {
@@ -2357,7 +2371,7 @@ export default function StealthMusicPlayer({
                 color: "from-purple-950/50 via-slate-950 to-slate-950"
               });
             });
-            if (data.hasMore === false || data.results.length < 10) {
+            if (data.hasMore === false) {
               serverHasMore = false;
             }
             break; // Got valid results from online backend
@@ -2368,24 +2382,24 @@ export default function StealthMusicPlayer({
       }
     }
 
-    // 3. Fallback to YouTube search endpoint if 0 results
+    // 5. Fallback to YouTube search endpoint if 0 results
     if (fullSongResults.length === 0) {
       const ytEndpoints = [];
       if (localBase) {
         ytEndpoints.push(`${localBase}/api/music/youtube-search?q=${encodeURIComponent(query)}`);
       }
-      if (!isCapacitor) {
+      if (import.meta.env?.DEV) {
         ytEndpoints.push(`/api/music/youtube-search?q=${encodeURIComponent(query)}`);
       }
       const defaultYt = `https://secret-bubble-backend.onrender.com/api/music/youtube-search?q=${encodeURIComponent(query)}`;
-      if (!ytEndpoints.includes(defaultYt)) {
+      if (!ytEndpoints.some(u => u.includes('onrender.com'))) {
         ytEndpoints.push(defaultYt);
       }
 
       for (const ytUrl of ytEndpoints) {
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 6000);
+          const timeoutId = setTimeout(() => controller.abort(), 4500);
           const ytRes = await fetch(ytUrl, { signal: controller.signal });
           clearTimeout(timeoutId);
           if (ytRes.ok) {
@@ -2416,8 +2430,7 @@ export default function StealthMusicPlayer({
       }
     }
 
-    // 4. In-Memory Catalog Substring Match Fallback (Guaranteed to return results for matching popular artists/songs)
-    const catalogPool = [...FEATURED_ONLINE_TRACKS, ...BACKUP_STREAM_POOL, ...tracks];
+    // 6. Merge with In-Memory Catalog Substring Matches
     const seenIds = new Set(fullSongResults.map(r => r.id));
     const matchedLocal = catalogPool.filter(song => {
       if (seenIds.has(song.id)) return false;
@@ -2440,6 +2453,7 @@ export default function StealthMusicPlayer({
     fullSongResults.sort((a, b) => (b.recencyScore || 0) - (a.recencyScore || 0));
 
     if (fullSongResults.length > 0) {
+      searchCacheRef.current[query] = fullSongResults;
       setSearchResults(fullSongResults);
       setHasMoreSearch(serverHasMore);
     } else {
@@ -2449,7 +2463,7 @@ export default function StealthMusicPlayer({
     setIsSearching(false);
   };
 
-  // Continuous Infinite Scrolling for Search Results
+  // Continuous Infinite Scrolling for Search Results (YouTube-style endless scroll)
   const loadMoreSearchResults = useCallback(async () => {
     const q = (activeSearchQueryRef.current || searchQuery).trim();
     if (!q || isSearching || isSearchingMoreRef.current || !hasMoreSearch) return;
@@ -2464,16 +2478,12 @@ export default function StealthMusicPlayer({
       if (localBase) {
         candidateEndpoints.push(`${localBase}/api/music/search?q=${encodeURIComponent(q)}&page=${nextPage}`);
       }
-      const isCapacitor = typeof window !== 'undefined' && (
-        Boolean(window.Capacitor?.isNativePlatform?.()) ||
-        Boolean(window.Capacitor) ||
-        window.location?.protocol === 'capacitor:' ||
-        (window.location?.hostname === 'localhost' && !window.location?.port)
-      );
-      if (!isCapacitor) {
+      if (import.meta.env?.DEV) {
         candidateEndpoints.push(`/api/music/search?q=${encodeURIComponent(q)}&page=${nextPage}`);
       }
-      candidateEndpoints.push(`https://secret-bubble-backend.onrender.com/api/music/search?q=${encodeURIComponent(q)}&page=${nextPage}`);
+      if (!candidateEndpoints.some(u => u.includes('onrender.com'))) {
+        candidateEndpoints.push(`https://secret-bubble-backend.onrender.com/api/music/search?q=${encodeURIComponent(q)}&page=${nextPage}`);
+      }
 
       let newItems = [];
       let serverHasMore = true;
@@ -2481,7 +2491,7 @@ export default function StealthMusicPlayer({
       for (const url of candidateEndpoints) {
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 7000);
+          const timeoutId = setTimeout(() => controller.abort(), 5000);
           const res = await fetch(url, { signal: controller.signal });
           clearTimeout(timeoutId);
           if (res.ok) {
@@ -2509,7 +2519,7 @@ export default function StealthMusicPlayer({
                     color: "from-purple-950/50 via-slate-950 to-slate-950"
                   };
                 });
-                if (data.hasMore === false || data.results.length < 10) {
+                if (data.hasMore === false) {
                   serverHasMore = false;
                 }
                 break;
@@ -2539,12 +2549,10 @@ export default function StealthMusicPlayer({
         });
         setSearchPage(nextPage);
         setHasMoreSearch(serverHasMore);
-      } else {
-        setHasMoreSearch(false);
       }
     } catch (err) {
-      console.error('Error loading more search songs:', err);
-      setHasMoreSearch(false);
+      console.warn('Error loading more search songs:', err);
+      // Keep hasMoreSearch true so temporary network glips do not halt infinite scrolling
     } finally {
       isSearchingMoreRef.current = false;
       setIsSearchingMore(false);
@@ -2985,7 +2993,7 @@ export default function StealthMusicPlayer({
             }
           }
 
-          const dispersedFresh = disperseArtistsAndComposers(uniqueFresh, 2);
+          const dispersedFresh = disperseArtistsAndComposers(uniqueFresh, 4);
           const finalFresh = dispersedFresh.length > 0 ? dispersedFresh : uniqueFresh;
 
           setTracks(prev => {
@@ -3185,7 +3193,7 @@ export default function StealthMusicPlayer({
       if (newTracks.length > 0) {
         const filteredNew = newTracks.filter(t => calculateTrackRelevance(t, tasteProfile, likedSongIds) > -45);
         const candidates = filteredNew.length > 0 ? filteredNew : newTracks;
-        const dispersedCandidates = disperseArtistsAndComposers(candidates, 2);
+        const dispersedCandidates = disperseArtistsAndComposers(candidates, 4);
         const toProcess = dispersedCandidates.length > 0 ? dispersedCandidates : candidates;
         let freshAdded = 0;
 
@@ -3223,12 +3231,12 @@ export default function StealthMusicPlayer({
 
         // If this page returned mostly songs already seen in this session, immediately fetch next page
         // so the user gets fresh songs seamlessly on scroll!
-        if (freshAdded < 3 && nextPage < 60) {
+        if (freshAdded < 5 && nextPage < 100) {
           setTimeout(() => {
             if (!isLoadingRef.current) {
               loadMoreSongs();
             }
-          }, 250);
+          }, 200);
         }
       } else {
         // Offline / Fallback generator to guarantee continuous non-stop stream without duplicates
