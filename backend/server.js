@@ -21,7 +21,8 @@ app.use((req, res, next) => {
 });
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ limit: '25mb', extended: true }));
 
 // Master cryptographic secret keys
 const MASTER_ENCRYPTION_SECRET = process.env.ENCRYPTION_SECRET || 'secret-bubble-aes-256-gcm-master-vault-2026-v2';
@@ -80,6 +81,7 @@ function sanitizeText(str) {
 
 const server = http.createServer(app);
 const io = new Server(server, {
+  maxHttpBufferSize: 2.5e7, // 25MB buffer for file attachments, Excel spreadsheets & documents
   cors: {
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE']
@@ -1377,13 +1379,21 @@ app.get('/api/messages', (req, res) => {
 // HTTP REST message send fallback (ensures persistence even if socket is disconnected/reconnecting)
 app.post('/api/messages/send', (req, res) => {
   const msgData = req.body;
-  if (!msgData || (!msgData.text && !msgData.hasPasscode)) {
-    return res.status(400).json({ success: false, message: 'Message text required' });
+  if (!msgData || (!msgData.text && !msgData.hasPasscode && !msgData.attachment)) {
+    return res.status(400).json({ success: false, message: 'Message text or attachment required' });
   }
 
   const senderId = msgData.senderId || 'user-unknown';
   const senderName = sanitizeText(msgData.sender || 'User');
   const sanitizedText = sanitizeText(msgData.text || '');
+
+  const attachment = msgData.attachment ? {
+    name: sanitizeText(msgData.attachment.name || 'document'),
+    size: parseInt(msgData.attachment.size, 10) || 0,
+    type: sanitizeText(msgData.attachment.type || 'application/octet-stream'),
+    data: msgData.attachment.data || '',
+    extension: sanitizeText(msgData.attachment.extension || '')
+  } : null;
 
   const aiAnalysis = analyzeSensitivity(sanitizedText);
   const shouldLock = Boolean(msgData.isLocked || msgData.hasPasscode || aiAnalysis.isSensitive);
@@ -1443,6 +1453,7 @@ app.post('/api/messages/send', (req, res) => {
     status: initialStatus,
     deliveredAt: deliveredAt,
     readAt: readAt,
+    attachment: attachment,
     e2eeEnvelope: msgData.e2eeEnvelope || null,
     timestamp: msgData.timestamp || new Date().toISOString()
   };
@@ -1482,13 +1493,13 @@ app.post('/api/messages/unlock-passcode', (req, res) => {
   }
 
   if (!msg.hasPasscode || !msg.passcodeHash) {
-    return res.json({ success: true, text: msg.text, e2eeEnvelope: msg.e2eeEnvelope || null });
+    return res.json({ success: true, text: msg.text, attachment: msg.attachment || null, e2eeEnvelope: msg.e2eeEnvelope || null });
   }
 
   const cleanPasscode = (passcode || '').trim();
   const inputHash = crypto.createHash('sha256').update(cleanPasscode).digest('hex');
   if (inputHash === msg.passcodeHash || (msg.passcodeHint && cleanPasscode === msg.passcodeHint.trim())) {
-    return res.json({ success: true, text: msg.text, e2eeEnvelope: msg.e2eeEnvelope || null });
+    return res.json({ success: true, text: msg.text, attachment: msg.attachment || null, e2eeEnvelope: msg.e2eeEnvelope || null });
   } else {
     return res.status(401).json({ success: false, message: 'Incorrect passcode. Access denied.' });
   }
@@ -3267,6 +3278,14 @@ io.on('connection', (socket) => {
     const senderName = socket.data.authenticated ? (socket.data.name || socket.data.username) : (msgData.sender || 'Anonymous');
     const sanitizedText = sanitizeText(msgData.text || '');
 
+    const attachment = msgData.attachment ? {
+      name: sanitizeText(msgData.attachment.name || 'document'),
+      size: parseInt(msgData.attachment.size, 10) || 0,
+      type: sanitizeText(msgData.attachment.type || 'application/octet-stream'),
+      data: msgData.attachment.data || '',
+      extension: sanitizeText(msgData.attachment.extension || '')
+    } : null;
+
     // Log chat telemetry
     recordUserActivity({ userId: senderId, username: senderName, activityType: 'chat' });
 
@@ -3332,6 +3351,7 @@ io.on('connection', (socket) => {
       status: initialStatus,
       deliveredAt: deliveredAt,
       readAt: readAt,
+      attachment: attachment,
       e2eeEnvelope: msgData.e2eeEnvelope || null,
       timestamp: msgData.timestamp || new Date().toISOString()
     };
@@ -3349,6 +3369,14 @@ io.on('connection', (socket) => {
       const maskedMsg = {
         ...newMsg,
         text: '[🔒 Passcode Protected Secret Message]',
+        attachment: attachment ? {
+          name: attachment.name,
+          size: attachment.size,
+          type: attachment.type,
+          extension: attachment.extension,
+          data: null,
+          isLocked: true
+        } : null,
         e2eeEnvelope: newMsg.e2eeEnvelope || null
       };
 
@@ -3434,12 +3462,12 @@ io.on('connection', (socket) => {
       return callback && callback({ success: false, message: 'Message not found or expired' });
     }
     if (!msg.hasPasscode || !msg.passcodeHash) {
-      return callback && callback({ success: true, text: msg.text });
+      return callback && callback({ success: true, text: msg.text, attachment: msg.attachment || null });
     }
     const cleanPasscode = (passcode || '').trim();
     const inputHash = crypto.createHash('sha256').update(cleanPasscode).digest('hex');
     if (inputHash === msg.passcodeHash || (msg.passcodeHint && cleanPasscode === msg.passcodeHint.trim())) {
-      return callback && callback({ success: true, text: msg.text });
+      return callback && callback({ success: true, text: msg.text, attachment: msg.attachment || null });
     } else {
       return callback && callback({ success: false, message: 'Incorrect passcode. Access denied.' });
     }

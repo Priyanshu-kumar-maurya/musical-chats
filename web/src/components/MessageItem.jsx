@@ -1,9 +1,40 @@
 import React, { useState } from 'react';
 import { 
   Lock, Unlock, EyeOff, Bot, Edit2, Trash2, 
-  Check, X, Eye, CheckCheck, Flame, Smile, KeyRound, AlertCircle, Loader2 
+  Check, X, Eye, CheckCheck, Flame, Smile, KeyRound, AlertCircle, Loader2,
+  FileSpreadsheet, FileText, FileArchive, FileCode, File, Download
 } from 'lucide-react';
 import { analyzeMessageSensitivity } from '../utils/aiPrivacyDetector';
+
+function getFileMeta(att) {
+  if (!att) return { icon: File, color: 'text-purple-400', bg: 'bg-slate-900/80 border-slate-700', label: 'Document', badge: 'bg-purple-500/20 text-purple-300' };
+  const ext = (att.extension || att.name?.split('.').pop() || '').toLowerCase();
+  
+  if (['xlsx', 'xls', 'csv'].includes(ext)) {
+    return { icon: FileSpreadsheet, color: 'text-emerald-400', bg: 'bg-emerald-950/70 border-emerald-500/40', label: 'Excel Spreadsheet', badge: 'bg-emerald-500/20 text-emerald-300' };
+  }
+  if (['pdf'].includes(ext)) {
+    return { icon: FileText, color: 'text-rose-400', bg: 'bg-rose-950/70 border-rose-500/40', label: 'PDF Document', badge: 'bg-rose-500/20 text-rose-300' };
+  }
+  if (['doc', 'docx', 'rtf', 'odt'].includes(ext)) {
+    return { icon: FileText, color: 'text-blue-400', bg: 'bg-blue-950/70 border-blue-500/40', label: 'Word Document', badge: 'bg-blue-500/20 text-blue-300' };
+  }
+  if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) {
+    return { icon: FileArchive, color: 'text-amber-400', bg: 'bg-amber-950/70 border-amber-500/40', label: 'Archive', badge: 'bg-amber-500/20 text-amber-300' };
+  }
+  if (['js', 'jsx', 'ts', 'tsx', 'py', 'java', 'c', 'cpp', 'html', 'css', 'json', 'xml', 'sql'].includes(ext)) {
+    return { icon: FileCode, color: 'text-indigo-400', bg: 'bg-indigo-950/70 border-indigo-500/40', label: 'Code File', badge: 'bg-indigo-500/20 text-indigo-300' };
+  }
+  return { icon: File, color: 'text-purple-400', bg: 'bg-slate-900/80 border-slate-700', label: 'Document', badge: 'bg-purple-500/20 text-purple-300' };
+}
+
+function formatFileSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
 
 const EMOJI_REACTIONS = ['❤️', '👍', '🔥', '😂', '👏', '😮'];
 
@@ -166,6 +197,59 @@ export default function MessageItem({
     setShowReactionPicker(false);
   };
 
+  const handleDownloadAttachment = (e, att) => {
+    e.stopPropagation();
+    if (!att || !att.data) return;
+    const link = document.createElement('a');
+    link.href = att.data;
+    link.download = att.name || 'download';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const renderAttachment = (att, isInteractive = true) => {
+    if (!att) return null;
+    const meta = getFileMeta(att);
+    const IconComponent = meta.icon;
+
+    return (
+      <div className={`mt-2 p-2.5 rounded-xl border flex items-center justify-between gap-3 shadow-inner ${
+        meta.bg
+      }`}>
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className={`p-2 rounded-lg bg-slate-900/90 border border-white/10 shrink-0 ${meta.color}`}>
+            <IconComponent className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-white truncate max-w-[170px] sm:max-w-[220px]" title={att.name}>
+              {att.name}
+            </p>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${meta.badge}`}>
+                {meta.label}
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono">
+                {formatFileSize(att.size)}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {isInteractive && att.data && (
+          <button
+            type="button"
+            onClick={(e) => handleDownloadAttachment(e, att)}
+            title={`Download ${att.name}`}
+            className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white shrink-0 transition active:scale-95 shadow cursor-pointer flex items-center justify-center"
+          >
+            <Download className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className={`flex flex-col mb-3.5 group relative ${isMe ? 'items-end' : 'items-start'} font-sans`}>
       
@@ -267,7 +351,10 @@ export default function MessageItem({
               </form>
             ) : (
               <>
-                <p className="leading-relaxed whitespace-pre-wrap">{message.text}</p>
+                {message.text && (
+                  <p className="leading-relaxed whitespace-pre-wrap">{message.text}</p>
+                )}
+                {renderAttachment(message.attachment, true)}
                 
                 {/* Telegram Footer: Timestamp, Viewers & Delivered Checkmarks */}
                 <div className={`text-[10px] mt-1.5 flex items-center justify-end gap-2 select-none ${
@@ -320,7 +407,10 @@ export default function MessageItem({
               </button>
             </div>
 
-            <p className="leading-relaxed whitespace-pre-wrap font-medium">{displayText}</p>
+            {displayText && (
+              <p className="leading-relaxed whitespace-pre-wrap font-medium">{displayText}</p>
+            )}
+            {renderAttachment(message.attachment, true)}
 
             {/* Footer */}
             <div className={`text-[10px] mt-1.5 flex items-center justify-between select-none ${
@@ -361,6 +451,14 @@ export default function MessageItem({
                       ? message.text 
                       : 'This message is password-protected. Tap to unlock and read.')}
               </p>
+              {message.attachment && (
+                <div className="mt-2 p-2 rounded-xl bg-slate-800/60 border border-slate-700/60 flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-slate-700">
+                    <File className="w-4 h-4 text-purple-400" />
+                  </div>
+                  <span className="text-xs truncate">{message.attachment.name || 'Protected Attachment'}</span>
+                </div>
+              )}
             </div>
 
             {/* Center Tap to Unlock Overlay */}

@@ -1,7 +1,41 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Lock, Unlock, Bot, Flame, Smile, Mic, Paperclip, X, KeyRound, Eye, EyeOff, ShieldCheck, Sparkles } from 'lucide-react';
+import { 
+  Send, Lock, Unlock, Bot, Flame, Smile, Mic, Paperclip, X, 
+  KeyRound, Eye, EyeOff, ShieldCheck, Sparkles, FileSpreadsheet, 
+  FileText, FileArchive, FileCode, File, AlertCircle 
+} from 'lucide-react';
 import { analyzeMessageSensitivity } from '../utils/aiPrivacyDetector';
 import { encryptE2EE } from '../utils/e2eeCrypto';
+
+function getFileMeta(att) {
+  if (!att) return { icon: File, color: 'text-purple-400', bg: 'bg-slate-900/80 border-slate-700', label: 'Document', badge: 'bg-purple-500/20 text-purple-300' };
+  const ext = (att.extension || att.name?.split('.').pop() || '').toLowerCase();
+  
+  if (['xlsx', 'xls', 'csv'].includes(ext)) {
+    return { icon: FileSpreadsheet, color: 'text-emerald-400', bg: 'bg-emerald-950/70 border-emerald-500/40', label: 'Excel Spreadsheet', badge: 'bg-emerald-500/20 text-emerald-300' };
+  }
+  if (['pdf'].includes(ext)) {
+    return { icon: FileText, color: 'text-rose-400', bg: 'bg-rose-950/70 border-rose-500/40', label: 'PDF Document', badge: 'bg-rose-500/20 text-rose-300' };
+  }
+  if (['doc', 'docx', 'rtf', 'odt'].includes(ext)) {
+    return { icon: FileText, color: 'text-blue-400', bg: 'bg-blue-950/70 border-blue-500/40', label: 'Word Document', badge: 'bg-blue-500/20 text-blue-300' };
+  }
+  if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) {
+    return { icon: FileArchive, color: 'text-amber-400', bg: 'bg-amber-950/70 border-amber-500/40', label: 'Archive', badge: 'bg-amber-500/20 text-amber-300' };
+  }
+  if (['js', 'jsx', 'ts', 'tsx', 'py', 'java', 'c', 'cpp', 'html', 'css', 'json', 'xml', 'sql'].includes(ext)) {
+    return { icon: FileCode, color: 'text-indigo-400', bg: 'bg-indigo-950/70 border-indigo-500/40', label: 'Code File', badge: 'bg-indigo-500/20 text-indigo-300' };
+  }
+  return { icon: File, color: 'text-purple-400', bg: 'bg-slate-900/80 border-slate-700', label: 'Document', badge: 'bg-purple-500/20 text-purple-300' };
+}
+
+function formatFileSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
 
 const DEFAULT_CATEGORIES = [
   { id: 'Adult & Physical Intimacy 🔞', label: 'Intimacy 🔞' },
@@ -40,9 +74,39 @@ export default function ChatInput({
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [aiDetection, setAiDetection] = useState({ isSensitive: false });
+  const [attachment, setAttachment] = useState(null);
+  const [fileError, setFileError] = useState('');
+  const fileInputRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const timerIntervalRef = useRef(null);
   const isSubmittingRef = useRef(false);
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // 15MB limit
+    if (file.size > 15 * 1024 * 1024) {
+      setFileError('File size exceeds 15MB limit. Please choose a smaller file.');
+      setTimeout(() => setFileError(''), 4000);
+      return;
+    }
+
+    const ext = file.name.split('.').pop().toLowerCase();
+    const reader = new FileReader();
+    reader.onload = () => {
+      setAttachment({
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/octet-stream',
+        extension: ext,
+        data: reader.result
+      });
+      setFileError('');
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
 
   // Live real-time AI Sensitivity scanning as user types
   useEffect(() => {
@@ -73,10 +137,12 @@ export default function ChatInput({
   const handleSubmit = async (e) => {
     e?.preventDefault();
     const currentText = text.trim();
-    if (!currentText || isSubmittingRef.current) return;
+    if ((!currentText && !attachment) || isSubmittingRef.current) return;
     isSubmittingRef.current = true;
 
-    // Immediately clear text input so user cannot double-submit
+    // Save attachment snapshot and clear state
+    const currentAttachment = attachment;
+    setAttachment(null);
     setText('');
     setIsLocked(false);
     setEnablePasscodeLock(false);
@@ -95,7 +161,7 @@ export default function ChatInput({
       let finalCategory = selectedCategory;
       let autoShielded = false;
 
-      if (settings?.aiEnabled) {
+      if (settings?.aiEnabled && currentText) {
         const analysis = analyzeMessageSensitivity(currentText, settings.categories);
         if (analysis.isSensitive) {
           finalLocked = true;
@@ -109,7 +175,7 @@ export default function ChatInput({
       const finalHint = shouldLock ? (hintToUse || (passToUse ? '' : '1234')) : null;
 
       let e2eeEnvelope = null;
-      if (shouldLock && finalPasscode) {
+      if (shouldLock && finalPasscode && currentText) {
         try {
           e2eeEnvelope = await encryptE2EE(currentText, finalPasscode);
         } catch (err) {
@@ -118,7 +184,8 @@ export default function ChatInput({
       }
 
       onSendMessage({
-        text: currentText,
+        text: currentText || (currentAttachment ? `Attached: ${currentAttachment.name}` : ''),
+        attachment: currentAttachment,
         e2eeEnvelope: e2eeEnvelope,
         isLocked: shouldLock,
         category: shouldLock ? finalCategory : 'General',
@@ -272,9 +339,75 @@ export default function ChatInput({
         </div>
       )}
 
+      {/* File Size / Format Error Notification */}
+      {fileError && (
+        <div className="flex items-center gap-2 px-3.5 py-2 mb-2 rounded-2xl bg-rose-950/90 border border-rose-500/40 text-xs text-rose-300 animate-in slide-in-from-bottom-1 shadow-lg">
+          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+          <span className="truncate">{fileError}</span>
+        </div>
+      )}
+
+      {/* Attachment Preview Card */}
+      {attachment && (() => {
+        const meta = getFileMeta(attachment);
+        const Icon = meta.icon;
+        return (
+          <div className="flex items-center justify-between gap-3 p-2.5 mb-2 rounded-2xl bg-slate-950/95 border border-purple-500/40 animate-in slide-in-from-bottom-2 duration-150 shadow-xl">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="p-2 rounded-xl bg-purple-500/10 shrink-0 border border-purple-500/20">
+                <Icon className={`w-5 h-5 ${meta.color}`} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-white truncate max-w-[200px] sm:max-w-xs" title={attachment.name}>
+                  {attachment.name}
+                </p>
+                <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+                  <span className={`px-1.5 py-0.5 rounded font-bold uppercase text-[9px] ${meta.badge}`}>
+                    {meta.label}
+                  </span>
+                  <span>•</span>
+                  <span>{formatFileSize(attachment.size)}</span>
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAttachment(null)}
+              className="p-1.5 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+              title="Remove attachment"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        );
+      })()}
+
       {/* Main Telegram Chat Input Form */}
       <form onSubmit={handleSubmit} className="flex items-center gap-2">
         
+        {/* Hidden File Input */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileSelect}
+          className="hidden"
+          accept="*/*"
+        />
+
+        {/* Paperclip File Attachment Button */}
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className={`p-2.5 sm:p-3 rounded-2xl border transition-all duration-200 flex items-center justify-center shrink-0 cursor-pointer ${
+            attachment
+              ? 'bg-purple-600/30 border-purple-500 text-purple-300 shadow-md shadow-purple-500/20 scale-105'
+              : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600'
+          }`}
+          title="Attach File (Excel, PDF, Word, Docs, Code & Archives)"
+        >
+          <Paperclip className="w-5 h-5" />
+        </button>
+
         {/* Toggle Lock & Password Button */}
         <button
           type="button"
@@ -376,11 +509,11 @@ export default function ChatInput({
           </button>
         </div>
 
-        {/* Voice Note or Send Button */}
-        {text.trim() ? (
+        {/* Send Button or Voice Note */}
+        {text.trim() || attachment ? (
           <button
             type="submit"
-            className="p-2.5 sm:p-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-2xl transition shadow-lg shadow-purple-600/30 flex items-center justify-center shrink-0 active:scale-95"
+            className="p-2.5 sm:p-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-2xl transition shadow-lg shadow-purple-600/30 flex items-center justify-center shrink-0 active:scale-95 cursor-pointer"
             title="Send Message"
           >
             <Send className="w-5 h-5" />
@@ -389,7 +522,7 @@ export default function ChatInput({
           <button
             type="button"
             onClick={handleVoiceRecord}
-            className={`p-2.5 sm:p-3 rounded-2xl border transition flex items-center justify-center shrink-0 ${
+            className={`p-2.5 sm:p-3 rounded-2xl border transition flex items-center justify-center shrink-0 cursor-pointer ${
               isRecordingVoice
                 ? 'bg-rose-600 border-rose-500 text-white animate-bounce'
                 : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'

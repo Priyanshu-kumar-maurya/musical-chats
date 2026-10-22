@@ -1018,7 +1018,10 @@ export default function App() {
           ...prev,
           [messageId]: finalText
         }));
-        return { success: true, text: finalText };
+        if (data.attachment) {
+          setMessages(prev => prev.map(m => m.id === messageId ? { ...m, attachment: data.attachment } : m));
+        }
+        return { success: true, text: finalText, attachment: data.attachment };
       }
       return { success: false, message: data.message || 'Incorrect passcode' };
     } catch (err) {
