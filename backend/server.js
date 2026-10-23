@@ -1273,7 +1273,7 @@ app.get('/api/users/search', (req, res) => {
   res.json({ success: true, users: matched });
 });
 
-// Unread message counts endpoint (Instant summary for sidebar badges upon login / reconnect)
+// Unread message counts & offline sync endpoint (Instant summary for sidebar badges upon login / reconnect)
 app.get('/api/messages/unreads', (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ success: false, message: 'userId required' });
@@ -1281,15 +1281,62 @@ app.get('/api/messages/unreads', (req, res) => {
   messages = loadMessages();
   const unreadCounts = {};
   let totalUnread = 0;
+  const pendingMessages = [];
 
   messages.forEach(m => {
-    if (m.recipientId === userId && (!m.viewers || !m.viewers.includes(userId)) && m.status !== 'read') {
-      unreadCounts[m.senderId] = (unreadCounts[m.senderId] || 0) + 1;
-      totalUnread++;
+    if (m.recipientId === userId) {
+      const isUnread = (!m.viewers || !m.viewers.includes(userId)) && m.status !== 'read';
+      if (isUnread) {
+        unreadCounts[m.senderId] = (unreadCounts[m.senderId] || 0) + 1;
+        totalUnread++;
+      }
+      // Include in pendingMessages if unread or delivered recently so client local store has full history
+      if (isUnread || (m.deliveredAt && Date.now() - m.deliveredAt < 7 * 24 * 3600 * 1000)) {
+        const safeMsg = (m.hasPasscode && m.senderId !== userId) ? {
+          ...m,
+          text: '[🔒 Passcode Protected Secret Message]',
+          attachment: m.attachment ? {
+            name: m.attachment.name,
+            size: m.attachment.size,
+            type: m.attachment.type,
+            extension: m.attachment.extension,
+            data: null,
+            isLocked: true
+          } : null
+        } : m;
+        pendingMessages.push(safeMsg);
+      }
     }
   });
 
-  res.json({ success: true, unreadCounts, totalUnread });
+  res.json({ success: true, unreadCounts, totalUnread, pendingMessages });
+});
+
+// Self-healing restore-cache endpoint: Recovers past messages from client local caches if server restarted
+app.post('/api/messages/restore-cache', (req, res) => {
+  const { messages: clientMessages } = req.body;
+  if (!Array.isArray(clientMessages) || clientMessages.length === 0) {
+    return res.json({ success: true, restored: 0 });
+  }
+
+  messages = loadMessages();
+  let addedCount = 0;
+  const existingIds = new Set(messages.map(m => m.id));
+
+  clientMessages.forEach(m => {
+    if (m && m.id && !existingIds.has(m.id)) {
+      messages.push(m);
+      existingIds.add(m.id);
+      addedCount++;
+    }
+  });
+
+  if (addedCount > 0) {
+    messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    saveMessages(messages);
+  }
+
+  res.json({ success: true, restored: addedCount, total: messages.length });
 });
 
 app.get('/api/messages', (req, res) => {
@@ -3230,6 +3277,7 @@ io.on('connection', (socket) => {
     let statusChanged = false;
     const deliveredIdsBySender = {};
     const unreadCounts = {};
+    const pendingMessages = [];
 
     messages.forEach(m => {
       if (m.recipientId === targetUserId) {
@@ -3240,8 +3288,24 @@ io.on('connection', (socket) => {
           if (!deliveredIdsBySender[m.senderId]) deliveredIdsBySender[m.senderId] = [];
           deliveredIdsBySender[m.senderId].push(m.id);
         }
-        if (!m.viewers || !m.viewers.includes(targetUserId)) {
+        const isUnread = (!m.viewers || !m.viewers.includes(targetUserId)) && m.status !== 'read';
+        if (isUnread) {
           unreadCounts[m.senderId] = (unreadCounts[m.senderId] || 0) + 1;
+        }
+        if (isUnread || (m.deliveredAt && Date.now() - m.deliveredAt < 7 * 24 * 3600 * 1000)) {
+          const safeMsg = (m.hasPasscode && m.senderId !== targetUserId) ? {
+            ...m,
+            text: '[🔒 Passcode Protected Secret Message]',
+            attachment: m.attachment ? {
+              name: m.attachment.name,
+              size: m.attachment.size,
+              type: m.attachment.type,
+              extension: m.attachment.extension,
+              data: null,
+              isLocked: true
+            } : null
+          } : m;
+          pendingMessages.push(safeMsg);
         }
       }
     });
@@ -3264,15 +3328,16 @@ io.on('connection', (socket) => {
       });
     }
 
-    // Deliver unread summary directly to the user who just came online
+    // Deliver unread summary and full pending offline messages directly to recipient
     socket.emit('offline_sync', {
       unreadCounts,
+      pendingMessages,
       totalUnread: Object.values(unreadCounts).reduce((a, b) => a + b, 0)
     });
   });
 
-  // Send Message (Protected against spoofing)
-  socket.on('send_message', async (msgData) => {
+  // Send Message (Protected against spoofing with guaranteed delivery callback)
+  socket.on('send_message', async (msgData, callback) => {
     // Identity verification
     const senderId = socket.data.authenticated ? socket.data.userId : (msgData.senderId || 'user-anon');
     const senderName = socket.data.authenticated ? (socket.data.name || socket.data.username) : (msgData.sender || 'Anonymous');
@@ -3412,6 +3477,10 @@ io.on('connection', (socket) => {
       } else {
         io.emit('new_message', newMsg);
       }
+    }
+
+    if (typeof callback === 'function') {
+      callback({ success: true, message: newMsg });
     }
 
     // Meta AI Response

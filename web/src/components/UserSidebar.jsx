@@ -4,6 +4,25 @@ import {
   Pin, Bot, CheckCheck, Menu, Moon, Lock, Settings as SettingsIcon, Sparkles, Plus, Brain, X, RefreshCw, Download 
 } from 'lucide-react';
 
+function getChatSnippet(userId, currentUserId) {
+  try {
+    const key = `secure_chat_cache_user_${userId}`;
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const msgs = JSON.parse(raw);
+    if (!Array.isArray(msgs) || msgs.length === 0) return null;
+    const lastMsg = msgs[msgs.length - 1];
+    let preview = lastMsg.text || '';
+    if (lastMsg.attachment) {
+      preview = `📎 ${lastMsg.attachment.name || 'Document'}`;
+    }
+    const time = lastMsg.timestamp ? new Date(lastMsg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    return { preview, time, isMe: lastMsg.senderId === currentUserId };
+  } catch {
+    return null;
+  }
+}
+
 export default function UserSidebar({
   currentUser,
   users,
@@ -286,7 +305,8 @@ export default function UserSidebar({
                 </p>
                 {filteredUsers.map((user) => {
                   const isSelected = selectedTarget?.type === 'user' && selectedTarget?.id === user.id;
-                  const unread = unreadCounts[user.id] || 0;
+                  const unread = Number(unreadCounts[user.id]) || 0;
+                  const snippet = getChatSnippet(user.id, currentUser?.id);
 
                   return (
                     <button
@@ -321,22 +341,40 @@ export default function UserSidebar({
 
                         <div className="text-left min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <p className="text-xs font-bold text-white truncate">{user.name}</p>
+                            <p className={`text-xs font-bold truncate ${unread > 0 ? 'text-white' : 'text-slate-200'}`}>
+                              {user.name}
+                            </p>
                             {user.isOnline && (
                               <span className="text-[9px] font-medium text-emerald-400">online</span>
                             )}
                           </div>
-                          <p className="text-[11px] text-purple-400 font-mono font-medium truncate mt-0.5">
-                            @{user.username}
+                          <p className={`text-[11px] truncate mt-0.5 ${
+                            unread > 0 ? 'text-purple-300 font-semibold' : 'text-slate-400'
+                          }`}>
+                            {snippet?.preview ? (
+                              <span>
+                                {snippet.isMe && <span className="text-slate-500 mr-1">You:</span>}
+                                {snippet.preview}
+                              </span>
+                            ) : (
+                              `@${user.username}`
+                            )}
                           </p>
                         </div>
                       </div>
 
-                      {unread > 0 && (
-                        <span className="px-2 py-0.5 rounded-full bg-purple-600 text-white text-[10px] font-bold shadow-md animate-bounce ml-2">
-                          {unread}
-                        </span>
-                      )}
+                      <div className="flex flex-col items-end shrink-0 ml-2">
+                        {snippet?.time && (
+                          <span className={`text-[10px] font-mono ${unread > 0 ? 'text-purple-300 font-bold' : 'text-slate-500'}`}>
+                            {snippet.time}
+                          </span>
+                        )}
+                        {unread > 0 && (
+                          <span className="mt-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-[10px] font-bold shadow-md shadow-purple-900/40 animate-pulse">
+                            {unread}
+                          </span>
+                        )}
+                      </div>
                     </button>
                   );
                 })}
@@ -543,7 +581,8 @@ export default function UserSidebar({
             {/* Real Users List */}
             {(activeFilter === 'all' || activeFilter === 'direct') && realUsers.map((user) => {
               const isSelected = selectedTarget?.type === 'user' && selectedTarget?.id === user.id;
-              const unread = unreadCounts[user.id] || 0;
+              const unread = Number(unreadCounts[user.id]) || 0;
+              const snippet = getChatSnippet(user.id, currentUser?.id);
 
               return (
                 <button
@@ -575,22 +614,40 @@ export default function UserSidebar({
 
                     <div className="text-left min-w-0">
                       <div className="flex items-center gap-1.5">
-                        <p className="text-xs font-bold text-white truncate">{user.name}</p>
+                        <p className={`text-xs font-bold truncate ${unread > 0 ? 'text-white' : 'text-slate-200'}`}>
+                          {user.name}
+                        </p>
                         {user.isOnline && (
                           <span className="text-[9px] font-medium text-emerald-400">online</span>
                         )}
                       </div>
-                      <p className="text-[11px] text-slate-400 truncate mt-0.5 font-mono">
-                        @{user.username}
+                      <p className={`text-[11px] truncate mt-0.5 ${
+                        unread > 0 ? 'text-purple-300 font-semibold' : 'text-slate-400'
+                      }`}>
+                        {snippet?.preview ? (
+                          <span>
+                            {snippet.isMe && <span className="text-slate-500 mr-1">You:</span>}
+                            {snippet.preview}
+                          </span>
+                        ) : (
+                          `@${user.username}`
+                        )}
                       </p>
                     </div>
                   </div>
 
-                  {unread > 0 && (
-                    <span className="px-2 py-0.5 rounded-full bg-purple-600 text-white text-[10px] font-bold shadow-md animate-bounce ml-2">
-                      {unread}
-                    </span>
-                  )}
+                  <div className="flex flex-col items-end shrink-0 ml-2">
+                    {snippet?.time && (
+                      <span className={`text-[10px] font-mono ${unread > 0 ? 'text-purple-300 font-bold' : 'text-slate-500'}`}>
+                        {snippet.time}
+                      </span>
+                    )}
+                    {unread > 0 && (
+                      <span className="mt-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-[10px] font-bold shadow-md shadow-purple-900/40 animate-pulse">
+                        {unread}
+                      </span>
+                    )}
+                  </div>
                 </button>
               );
             })}

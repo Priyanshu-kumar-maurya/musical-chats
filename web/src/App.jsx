@@ -536,8 +536,28 @@ export default function App() {
         try {
           const unreadRes = await fetch(`${backendUrl}/api/messages/unreads?userId=${currentUserRef.current.id}`);
           const unreadData = await unreadRes.json();
-          if (unreadData.success && unreadData.unreadCounts) {
-            setUnreadCounts(prev => ({ ...prev, ...unreadData.unreadCounts }));
+          if (unreadData.success) {
+            if (unreadData.unreadCounts) {
+              setUnreadCounts(prev => ({ ...prev, ...unreadData.unreadCounts }));
+            }
+            if (Array.isArray(unreadData.pendingMessages) && unreadData.pendingMessages.length > 0) {
+              const currentUserId = currentUserRef.current.id;
+              const byChat = {};
+              unreadData.pendingMessages.forEach(m => {
+                const chatId = m.senderId === currentUserId ? m.recipientId : m.senderId;
+                if (!byChat[chatId]) byChat[chatId] = [];
+                byChat[chatId].push(m);
+              });
+              Object.entries(byChat).forEach(([chatId, newMsgs]) => {
+                try {
+                  const key = `secure_chat_cache_user_${chatId}`;
+                  const existingRaw = localStorage.getItem(key);
+                  const existing = existingRaw ? JSON.parse(existingRaw) : [];
+                  const merged = deduplicateMessages([...existing, ...newMsgs]);
+                  localStorage.setItem(key, JSON.stringify(merged.slice(-200)));
+                } catch {}
+              });
+            }
           }
         } catch {}
       }
@@ -597,12 +617,25 @@ export default function App() {
       const res = await fetch(url);
       const data = await res.json();
       if (data.success && Array.isArray(data.messages)) {
-        const deduped = deduplicateMessages(data.messages);
-        setMessages(deduped);
-        try {
-          const key = `secure_chat_cache_${currentTarget.type}_${currentTarget.id}`;
-          localStorage.setItem(key, JSON.stringify(deduped.slice(-100)));
-        } catch {}
+        setMessages(prev => {
+          // Robust merge: Never wipe out existing local messages with an empty server response!
+          const merged = deduplicateMessages([...prev, ...data.messages]);
+          try {
+            const key = `secure_chat_cache_${currentTarget.type}_${currentTarget.id}`;
+            localStorage.setItem(key, JSON.stringify(merged.slice(-200)));
+          } catch {}
+
+          // If local client had messages that server was missing (e.g. server cold-booted or restarted on Render), restore to server!
+          if (prev.length > data.messages.length) {
+            fetch(`${backendUrl}/api/messages/restore-cache`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ messages: prev })
+            }).catch(() => {});
+          }
+
+          return merged;
+        });
         
         // Mark viewed & read (WhatsApp/Telegram Double Blue/Cyan Ticks)
         if (socket && data.messages.length > 0) {
@@ -648,10 +681,47 @@ export default function App() {
       fetchGroups();
     });
 
-    // Offline unread sync from server upon reconnecting
-    s.on('offline_sync', ({ unreadCounts }) => {
+    // Offline unread sync & pending message delivery from server upon reconnecting
+    s.on('offline_sync', ({ unreadCounts, pendingMessages }) => {
       if (unreadCounts && typeof unreadCounts === 'object') {
         setUnreadCounts(prev => ({ ...prev, ...unreadCounts }));
+      }
+      if (Array.isArray(pendingMessages) && pendingMessages.length > 0) {
+        const currentTarget = selectedTargetRef.current;
+        const currentUserId = currentUserRef.current?.id;
+
+        // Group pending messages by chat
+        const byChat = {};
+        pendingMessages.forEach(m => {
+          const chatId = m.senderId === currentUserId ? m.recipientId : m.senderId;
+          if (!byChat[chatId]) byChat[chatId] = [];
+          byChat[chatId].push(m);
+        });
+
+        // Save each chat's messages to local storage cache immediately
+        Object.entries(byChat).forEach(([chatId, newMsgs]) => {
+          try {
+            const key = `secure_chat_cache_user_${chatId}`;
+            const existingRaw = localStorage.getItem(key);
+            const existing = existingRaw ? JSON.parse(existingRaw) : [];
+            const merged = deduplicateMessages([...existing, ...newMsgs]);
+            localStorage.setItem(key, JSON.stringify(merged.slice(-200)));
+          } catch {}
+        });
+
+        // If the user currently has one of these chats open, update displayed messages state!
+        if (currentTarget.type === 'user' && byChat[currentTarget.id]) {
+          setMessages(prev => deduplicateMessages([...prev, ...byChat[currentTarget.id]]));
+          s.emit('mark_chat_read', { senderId: currentTarget.id, viewerId: currentUserId });
+          setUnreadCounts(prev => ({ ...prev, [currentTarget.id]: 0 }));
+        }
+
+        playMessageChime();
+        try {
+          if (typeof navigator !== 'undefined' && navigator.vibrate) {
+            navigator.vibrate([100, 50, 100]);
+          }
+        } catch {}
       }
     });
 
@@ -878,7 +948,22 @@ export default function App() {
     });
 
     if (socket && connectionStatus === 'connected') {
-      socket.emit('send_message', payload);
+      let acknowledged = false;
+      const ackTimeout = setTimeout(() => {
+        if (!acknowledged) {
+          // Fallback to HTTP REST to guarantee delivery to server
+          fetch(`${backendUrl}/api/messages/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          }).catch(err => console.warn('HTTP fallback message save error:', err));
+        }
+      }, 2500);
+
+      socket.emit('send_message', payload, (res) => {
+        acknowledged = true;
+        clearTimeout(ackTimeout);
+      });
     } else {
       // Fallback: POST via HTTP REST API to guarantee disk persistence
       try {
