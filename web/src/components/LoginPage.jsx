@@ -91,6 +91,7 @@ export default function LoginPage({ onLoginSuccess, backendUrl, onOpenInstall, o
       }
       try {
         localStorage.setItem('secret_bubble_saved_account', JSON.stringify({
+          id: data.user?.id || ('u_' + cleanUser),
           username: cleanUser,
           name: data.user?.name || cleanUser,
           avatarUrl: data.user?.avatarUrl || null,
@@ -186,6 +187,7 @@ export default function LoginPage({ onLoginSuccess, backendUrl, onOpenInstall, o
       // Save user account for future auto-recovery
       try {
         localStorage.setItem('secret_bubble_saved_account', JSON.stringify({
+          id: data.user?.id || ('u_' + cleanUser),
           username: cleanUser,
           name: data.user?.name || name || cleanUser,
           avatarUrl: data.user?.avatarUrl || avatarUrl || null,

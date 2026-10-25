@@ -64,7 +64,41 @@ export default function UserSidebar({
 
   // Separate Meta AI Bot, Public Channel, and real users
   const metaAiBot = users.find(u => u.id === 'user-meta-ai' || u.isBot);
-  const realUsers = users.filter(u => u.id !== currentUser?.id && u.id !== 'user-meta-ai' && !u.isBot);
+  const knownUsersMap = new Map();
+  users.forEach(u => {
+    if (u && u.id && u.id !== currentUser?.id && u.id !== 'user-meta-ai' && !u.isBot) {
+      knownUsersMap.set(u.id, u);
+    }
+  });
+
+  // Check if any chat caches exist in localStorage that are not in users list
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('secure_chat_cache_user_')) {
+        const uId = k.replace('secure_chat_cache_user_', '');
+        if (uId && uId !== currentUser?.id && uId !== 'user-meta-ai' && !knownUsersMap.has(uId)) {
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            const msgs = JSON.parse(raw);
+            if (Array.isArray(msgs) && msgs.length > 0) {
+              const otherMsg = msgs.find(m => m && m.senderId === uId);
+              const displayName = otherMsg?.sender || uId.replace(/^u_/, '').replace(/^user-/, '');
+              knownUsersMap.set(uId, {
+                id: uId,
+                username: uId.replace(/^u_/, '').replace(/^user-/, ''),
+                name: displayName,
+                avatarUrl: otherMsg?.senderAvatar || null,
+                avatarColor: 'from-purple-600 to-indigo-500'
+              });
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const realUsers = Array.from(knownUsersMap.values());
 
   const cleanSearch = search.trim().toLowerCase().replace(/^@+/, '');
   const rawSearch = search.trim().toLowerCase();

@@ -101,7 +101,7 @@ export default function WelcomeOnboardingModal({ isOpen, onComplete, backendUrl 
 
     // Offline / fallback profile creation
     const fallbackUser = {
-      id: 'user-' + Date.now(),
+      id: 'u_' + cleanUsername,
       username: cleanUsername,
       name: displayName,
       avatarColor: 'from-emerald-600 to-teal-500',

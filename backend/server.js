@@ -823,7 +823,7 @@ app.get('/api/auth/me', (req, res) => {
   if (!user && session.username) {
     const cleanUsername = (session.username || '').trim().toLowerCase().replace(/^@+/, '');
     const restoredUser = {
-      id: session.userId || ('user-' + Date.now()),
+      id: session.userId || ('u_' + cleanUsername),
       username: cleanUsername,
       name: sanitizeText(session.name || cleanUsername),
       avatarColor: 'from-purple-600 to-indigo-500',
@@ -921,7 +921,7 @@ app.post('/api/auth/register', authRegisterLimiter, (req, res) => {
   const avatarColor = colors[Math.floor(Math.random() * colors.length)];
 
   const newUser = {
-    id: 'user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
+    id: 'u_' + cleanUsername,
     username: cleanUsername,
     name: sanitizeText(name ? name.trim() : cleanUsername),
     passwordHash: hashPassword(password), // Salted PBKDF2 100,000 iterations!
@@ -989,7 +989,7 @@ app.post('/api/auth/quick-onboard', authOnboardLimiter, (req, res) => {
     const avatarColor = colors[Math.floor(Math.random() * colors.length)];
 
     const newUser = {
-      id: 'user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
+      id: 'u_' + finalUsername,
       username: finalUsername,
       name: cleanName,
       passwordHash: hashPassword(stealthPin || '1234'),
@@ -1073,7 +1073,7 @@ app.post('/api/auth/login', authLoginLimiter, (req, res) => {
   // 2. If user was not found on this server instance (e.g. Render container restart), but client has cached profile:
   if (!user && cachedProfile && (cachedProfile.username || '').toLowerCase().replace(/^@+/, '') === cleanUsername) {
     const restoredUser = {
-      id: cachedProfile.id || ('user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4)),
+      id: cachedProfile.id || ('u_' + cleanUsername),
       username: cleanUsername,
       name: sanitizeText(cachedProfile.name ? cachedProfile.name.trim() : cleanUsername),
       passwordHash: hashPassword(password),
@@ -1271,6 +1271,46 @@ app.get('/api/users/search', (req, res) => {
     isOnline: onlineUsers.has(u.id) && onlineUsers.get(u.id).size > 0
   }));
   res.json({ success: true, users: matched });
+});
+
+// Sync and restore contacts from client address books (Ensures no contacts are lost across container restarts)
+app.post('/api/users/sync-contacts', (req, res) => {
+  const { contacts } = req.body || {};
+  if (!Array.isArray(contacts) || contacts.length === 0) {
+    return res.json({ success: true, added: 0 });
+  }
+
+  users = loadUsers();
+  let added = 0;
+  const existingIds = new Set(users.map(u => u.id));
+  const existingUsernames = new Set(users.map(u => (u.username || '').toLowerCase()));
+
+  contacts.forEach(c => {
+    if (c && (c.id || c.username)) {
+      const cleanUser = (c.username || '').toLowerCase().replace(/^@+/, '');
+      const userId = c.id || ('u_' + cleanUser);
+      if (!existingIds.has(userId) && (!cleanUser || !existingUsernames.has(cleanUser))) {
+        users.push({
+          id: userId,
+          username: cleanUser || userId,
+          name: sanitizeText(c.name || cleanUser || 'Friend'),
+          avatarColor: c.avatarColor || 'from-purple-600 to-indigo-500',
+          avatarUrl: c.avatarUrl || null,
+          bio: sanitizeText(c.bio || 'Hey there! I am using Secret-Bubble.'),
+          createdAt: c.createdAt || new Date().toISOString()
+        });
+        existingIds.add(userId);
+        if (cleanUser) existingUsernames.add(cleanUser);
+        added++;
+      }
+    }
+  });
+
+  if (added > 0) {
+    saveUsers(users);
+  }
+
+  res.json({ success: true, added, total: users.length });
 });
 
 // Unread message counts & offline sync endpoint (Instant summary for sidebar badges upon login / reconnect)

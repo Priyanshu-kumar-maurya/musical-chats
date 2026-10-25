@@ -123,6 +123,65 @@ function playMessageChime() {
   } catch (e) {}
 }
 
+// Local contact address book persistence and chat cache scanner
+function getSavedContacts() {
+  try {
+    const raw = localStorage.getItem('secure_chat_saved_contacts');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+function saveContactLocally(contact) {
+  if (!contact || !contact.id || contact.id === 'user-meta-ai' || contact.isBot) return;
+  try {
+    const existing = getSavedContacts();
+    const idx = existing.findIndex(c => c.id === contact.id);
+    let updated;
+    if (idx !== -1) {
+      updated = [...existing];
+      updated[idx] = { ...updated[idx], ...contact };
+    } else {
+      updated = [...existing, contact];
+    }
+    localStorage.setItem('secure_chat_saved_contacts', JSON.stringify(updated));
+  } catch {}
+}
+
+function extractContactsFromCaches(currentUserId) {
+  const discovered = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('secure_chat_cache_user_')) {
+        const otherUserId = k.replace('secure_chat_cache_user_', '');
+        if (otherUserId && otherUserId !== currentUserId && otherUserId !== 'user-meta-ai') {
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            const msgs = JSON.parse(raw);
+            if (Array.isArray(msgs) && msgs.length > 0) {
+              const otherMsg = msgs.find(m => m && m.senderId === otherUserId);
+              const name = otherMsg?.sender || otherUserId.replace(/^u_/, '').replace(/^user-/, '');
+              const avatarUrl = otherMsg?.senderAvatar || null;
+              discovered.push({
+                id: otherUserId,
+                username: otherUserId.replace(/^u_/, '').replace(/^user-/, ''),
+                name: name,
+                avatarUrl: avatarUrl,
+                avatarColor: 'from-purple-600 to-indigo-500'
+              });
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+  return discovered;
+}
+
 export default function App() {
   const [isStealthMode, setIsStealthMode] = useState(() => {
     try {
@@ -291,19 +350,63 @@ export default function App() {
     }
   });
 
-  const [users, setUsers] = useState([]);
-  const [groups, setGroups] = useState([]);
-  const [selectedTarget, setSelectedTarget] = useState({ type: 'room', id: 'global', name: '🌍 Global Public Chat' });
+  const [users, setUsers] = useState(() => {
+    try {
+      const saved = getSavedContacts();
+      const cached = extractContactsFromCaches(null);
+      const contactMap = new Map();
+      [...saved, ...cached].forEach(c => {
+        if (c && c.id) contactMap.set(c.id, c);
+      });
+      contactMap.set('user-meta-ai', {
+        id: 'user-meta-ai',
+        username: 'meta_ai',
+        name: 'Meta AI Assistant',
+        isBot: true,
+        avatarColor: 'from-blue-600 via-indigo-500 to-cyan-400',
+        avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=MetaAI&backgroundColor=6366f1',
+        isOnline: true
+      });
+      return Array.from(contactMap.values());
+    } catch {
+      return [];
+    }
+  });
+  const [groups, setGroups] = useState(() => {
+    try {
+      const saved = localStorage.getItem('secure_chat_saved_groups');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
+  const [selectedTarget, setSelectedTarget] = useState(() => {
+    try {
+      const saved = localStorage.getItem('secure_chat_last_target');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.id) return parsed;
+      }
+    } catch {}
+    return { type: 'room', id: 'global', name: '🌍 Global Public Chat' };
+  });
   const [messages, setMessages] = useState(() => {
     try {
-      const cached = localStorage.getItem('secure_chat_cache_room_global');
+      const initialTarget = (() => {
+        try {
+          const s = localStorage.getItem('secure_chat_last_target');
+          if (s) return JSON.parse(s);
+        } catch {}
+        return { type: 'room', id: 'global' };
+      })();
+      const key = `secure_chat_cache_${initialTarget.type}_${initialTarget.id}`;
+      const cached = localStorage.getItem(key);
       if (cached) {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed)) {
-          // Filter out any stale dummy messages from early development and deduplicate
-          return deduplicateMessages(
-            parsed.filter(m => m.senderId !== 'user-priya' && m.senderId !== 'user-rahul')
-          );
+          return deduplicateMessages(parsed);
         }
       }
       return [];
@@ -383,16 +486,8 @@ export default function App() {
 
   const backendUrl = useMemo(() => getBackendUrl(), []);
 
-  // Session token verification against backend on startup & purge old dummy cache
+  // Session token verification against backend on startup
   useEffect(() => {
-    try {
-      const globalCache = localStorage.getItem('secure_chat_cache_room_global');
-      if (globalCache && (globalCache.includes('user-priya') || globalCache.includes('user-rahul'))) {
-        localStorage.removeItem('secure_chat_cache_room_global');
-        setMessages([]);
-      }
-    } catch {}
-
     const token = localStorage.getItem('secure_chat_token');
     if (!token) {
       if (currentUser) {
@@ -525,46 +620,62 @@ export default function App() {
 
   // Fetch Users List & Offline Unread Sync
   const fetchUsers = useCallback(async () => {
+    const currentUserId = currentUserRef.current?.id;
+    const savedContacts = getSavedContacts();
+    const cachedContacts = extractContactsFromCaches(currentUserId);
+
+    const localContactMap = new Map();
+    [...savedContacts, ...cachedContacts].forEach(c => {
+      if (c && c.id) localContactMap.set(c.id, c);
+    });
+
     try {
       const res = await fetch(`${backendUrl}/api/users`);
       const data = await res.json();
-      if (data.success) {
-        setUsers(data.users);
-      }
-      // Instant offline unread count sync for sidebar badges
-      if (currentUserRef.current) {
-        try {
-          const unreadRes = await fetch(`${backendUrl}/api/messages/unreads?userId=${currentUserRef.current.id}`);
-          const unreadData = await unreadRes.json();
-          if (unreadData.success) {
-            if (unreadData.unreadCounts) {
-              setUnreadCounts(prev => ({ ...prev, ...unreadData.unreadCounts }));
-            }
-            if (Array.isArray(unreadData.pendingMessages) && unreadData.pendingMessages.length > 0) {
-              const currentUserId = currentUserRef.current.id;
-              const byChat = {};
-              unreadData.pendingMessages.forEach(m => {
-                const chatId = m.senderId === currentUserId ? m.recipientId : m.senderId;
-                if (!byChat[chatId]) byChat[chatId] = [];
-                byChat[chatId].push(m);
-              });
-              Object.entries(byChat).forEach(([chatId, newMsgs]) => {
-                try {
-                  const key = `secure_chat_cache_user_${chatId}`;
-                  const existingRaw = localStorage.getItem(key);
-                  const existing = existingRaw ? JSON.parse(existingRaw) : [];
-                  const merged = deduplicateMessages([...existing, ...newMsgs]);
-                  localStorage.setItem(key, JSON.stringify(merged.slice(-200)));
-                } catch {}
-              });
-            }
+      if (data.success && Array.isArray(data.users)) {
+        // Merge server users with local contacts so no friends disappear
+        const mergedMap = new Map(localContactMap);
+        data.users.forEach(u => {
+          if (u && u.id) {
+            mergedMap.set(u.id, { ...(mergedMap.get(u.id) || {}), ...u });
           }
+        });
+
+        // Always ensure Meta AI Bot is included
+        if (!mergedMap.has('user-meta-ai')) {
+          mergedMap.set('user-meta-ai', {
+            id: 'user-meta-ai',
+            username: 'meta_ai',
+            name: 'Meta AI Assistant',
+            isBot: true,
+            avatarColor: 'from-blue-600 via-indigo-500 to-cyan-400',
+            avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=MetaAI&backgroundColor=6366f1',
+            isOnline: true
+          });
+        }
+
+        const mergedUsers = Array.from(mergedMap.values());
+        setUsers(mergedUsers);
+
+        // Save back to local address book
+        try {
+          const toSave = mergedUsers.filter(u => !u.isBot && u.id !== 'user-meta-ai');
+          localStorage.setItem('secure_chat_saved_contacts', JSON.stringify(toSave));
         } catch {}
+
+        // Sync contacts back to server in case server restarted on Render
+        if (mergedUsers.length > data.users.length) {
+          fetch(`${backendUrl}/api/users/sync-contacts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contacts: mergedUsers })
+          }).catch(() => {});
+        }
       }
     } catch (e) {
-      // Offline fallback: Meta AI Bot
-      setUsers([
-        {
+      // Offline fallback: Use all local contacts + Meta AI
+      if (!localContactMap.has('user-meta-ai')) {
+        localContactMap.set('user-meta-ai', {
           id: 'user-meta-ai',
           username: 'meta_ai',
           name: 'Meta AI Assistant',
@@ -572,8 +683,40 @@ export default function App() {
           avatarColor: 'from-blue-600 via-indigo-500 to-cyan-400',
           avatarUrl: 'https://api.dicebear.com/7.x/bottts/svg?seed=MetaAI&backgroundColor=6366f1',
           isOnline: true
+        });
+      }
+      setUsers(Array.from(localContactMap.values()));
+    }
+
+    // Instant offline unread count sync for sidebar badges
+    if (currentUserRef.current) {
+      try {
+        const unreadRes = await fetch(`${backendUrl}/api/messages/unreads?userId=${currentUserRef.current.id}`);
+        const unreadData = await unreadRes.json();
+        if (unreadData.success) {
+          if (unreadData.unreadCounts) {
+            setUnreadCounts(prev => ({ ...prev, ...unreadData.unreadCounts }));
+          }
+          if (Array.isArray(unreadData.pendingMessages) && unreadData.pendingMessages.length > 0) {
+            const currentUserId = currentUserRef.current.id;
+            const byChat = {};
+            unreadData.pendingMessages.forEach(m => {
+              const chatId = m.senderId === currentUserId ? m.recipientId : m.senderId;
+              if (!byChat[chatId]) byChat[chatId] = [];
+              byChat[chatId].push(m);
+            });
+            Object.entries(byChat).forEach(([chatId, newMsgs]) => {
+              try {
+                const key = `secure_chat_cache_user_${chatId}`;
+                const existingRaw = localStorage.getItem(key);
+                const existing = existingRaw ? JSON.parse(existingRaw) : [];
+                const merged = deduplicateMessages([...existing, ...newMsgs]);
+                localStorage.setItem(key, JSON.stringify(merged.slice(-500)));
+              } catch {}
+            });
+          }
         }
-      ]);
+      } catch {}
     }
   }, [backendUrl]);
 
@@ -585,6 +728,9 @@ export default function App() {
       const data = await res.json();
       if (data.success && Array.isArray(data.groups)) {
         setGroups(data.groups);
+        try {
+          localStorage.setItem('secure_chat_saved_groups', JSON.stringify(data.groups));
+        } catch {}
       }
     } catch (e) {}
   }, [backendUrl]);
@@ -596,11 +742,15 @@ export default function App() {
       const cached = localStorage.getItem(key);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsed) && parsed.length > 0) {
           setMessages(deduplicateMessages(parsed));
+          return;
         }
       }
-    } catch {}
+      setMessages([]);
+    } catch {
+      setMessages([]);
+    }
   }, [selectedTarget.type, selectedTarget.id]);
 
   // Fetch Messages for current selected target
@@ -608,6 +758,16 @@ export default function App() {
     if (!currentUserRef.current) return;
     try {
       const currentTarget = selectedTargetRef.current;
+      const key = `secure_chat_cache_${currentTarget.type}_${currentTarget.id}`;
+      let localCached = [];
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) localCached = parsed;
+        }
+      } catch {}
+
       let url = `${backendUrl}/api/messages`;
       if (currentTarget.type === 'room') {
         url += `?roomId=${currentTarget.id}&userId=${currentUserRef.current.id}`;
@@ -619,18 +779,17 @@ export default function App() {
       if (data.success && Array.isArray(data.messages)) {
         setMessages(prev => {
           // Robust merge: Never wipe out existing local messages with an empty server response!
-          const merged = deduplicateMessages([...prev, ...data.messages]);
+          const merged = deduplicateMessages([...localCached, ...prev, ...data.messages]);
           try {
-            const key = `secure_chat_cache_${currentTarget.type}_${currentTarget.id}`;
-            localStorage.setItem(key, JSON.stringify(merged.slice(-200)));
+            localStorage.setItem(key, JSON.stringify(merged.slice(-500)));
           } catch {}
 
           // If local client had messages that server was missing (e.g. server cold-booted or restarted on Render), restore to server!
-          if (prev.length > data.messages.length) {
+          if (merged.length > data.messages.length) {
             fetch(`${backendUrl}/api/messages/restore-cache`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ messages: prev })
+              body: JSON.stringify({ messages: merged })
             }).catch(() => {});
           }
 
@@ -826,7 +985,7 @@ export default function App() {
             updated[optIdx] = msg;
             try {
               const key = `secure_chat_cache_${currentTarget.type}_${currentTarget.id}`;
-              localStorage.setItem(key, JSON.stringify(updated.slice(-100)));
+              localStorage.setItem(key, JSON.stringify(updated.slice(-500)));
             } catch {}
             return updated;
           }
@@ -834,7 +993,7 @@ export default function App() {
           const updated = deduplicateMessages([...prev, msg]);
           try {
             const key = `secure_chat_cache_${currentTarget.type}_${currentTarget.id}`;
-            localStorage.setItem(key, JSON.stringify(updated.slice(-100)));
+            localStorage.setItem(key, JSON.stringify(updated.slice(-500)));
           } catch {}
           return updated;
         });
@@ -850,11 +1009,46 @@ export default function App() {
           ...prev,
           [fromId]: (prev[fromId] || 0) + 1
         }));
+
+        // Persist message to that chat's local storage cache immediately
+        try {
+          const key = `secure_chat_cache_user_${fromId}`;
+          const raw = localStorage.getItem(key);
+          const existing = raw ? JSON.parse(raw) : [];
+          const updated = deduplicateMessages([...existing, msg]);
+          localStorage.setItem(key, JSON.stringify(updated.slice(-500)));
+        } catch {}
+
+        // Ensure sender exists in contacts and users state
+        if (msg.senderId && msg.sender) {
+          const newContact = {
+            id: msg.senderId,
+            name: msg.sender,
+            username: (msg.sender || '').toLowerCase().replace(/\s+/g, '_'),
+            avatarUrl: msg.senderAvatar || null,
+            avatarColor: 'from-purple-600 to-indigo-500'
+          };
+          saveContactLocally(newContact);
+          setUsers(prev => {
+            if (prev.some(u => u.id === newContact.id)) return prev;
+            return [...prev, newContact];
+          });
+        }
+
         playMessageChime();
         try {
           if (typeof navigator !== 'undefined' && navigator.vibrate) {
             navigator.vibrate([100, 50, 100]);
           }
+        } catch {}
+      } else if (msg.roomId && !msg.recipientId) {
+        // Background room/group message - persist to room cache
+        try {
+          const key = `secure_chat_cache_room_${msg.roomId}`;
+          const raw = localStorage.getItem(key);
+          const existing = raw ? JSON.parse(raw) : [];
+          const updated = deduplicateMessages([...existing, msg]);
+          localStorage.setItem(key, JSON.stringify(updated.slice(-500)));
         } catch {}
       }
     });
@@ -942,10 +1136,25 @@ export default function App() {
       const updated = deduplicateMessages([...prev, payload]);
       try {
         const key = `secure_chat_cache_${selectedTarget.type}_${selectedTarget.id}`;
-        localStorage.setItem(key, JSON.stringify(updated.slice(-100)));
+        localStorage.setItem(key, JSON.stringify(updated.slice(-500)));
       } catch {}
       return updated;
     });
+
+    if (selectedTarget.type === 'user' && selectedTarget.id && selectedTarget.id !== 'user-meta-ai') {
+      const contactObj = {
+        id: selectedTarget.id,
+        name: selectedTarget.name,
+        username: selectedTarget.username,
+        avatarUrl: selectedTarget.avatarUrl || null,
+        avatarColor: selectedTarget.avatarColor || 'from-purple-600 to-indigo-500'
+      };
+      saveContactLocally(contactObj);
+      setUsers(prev => {
+        if (prev.some(u => u.id === contactObj.id)) return prev;
+        return [...prev, contactObj];
+      });
+    }
 
     if (socket && connectionStatus === 'connected') {
       let acknowledged = false;
@@ -999,7 +1208,7 @@ export default function App() {
             const updated = [...prev, aiMsg];
             try {
               const key = `secure_chat_cache_${selectedTarget.type}_${selectedTarget.id}`;
-              localStorage.setItem(key, JSON.stringify(updated.slice(-100)));
+              localStorage.setItem(key, JSON.stringify(updated.slice(-500)));
             } catch {}
             return updated;
           });
@@ -1040,6 +1249,23 @@ export default function App() {
 
   const handleSelectTarget = (target) => {
     setSelectedTarget(target);
+    try {
+      localStorage.setItem('secure_chat_last_target', JSON.stringify(target));
+      if (target.type === 'user' && target.id && target.id !== 'user-meta-ai') {
+        const contactObj = {
+          id: target.id,
+          name: target.name || target.username || 'Friend',
+          username: target.username || target.name || target.id,
+          avatarUrl: target.avatarUrl || null,
+          avatarColor: target.avatarColor || 'from-purple-600 to-indigo-500'
+        };
+        saveContactLocally(contactObj);
+        setUsers(prev => {
+          if (prev.some(u => u.id === contactObj.id)) return prev;
+          return [...prev, contactObj];
+        });
+      }
+    } catch {}
     setIsSidebarOpen(false);
     relockAll();
     if (target.id) {
