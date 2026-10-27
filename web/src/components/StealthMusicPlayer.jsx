@@ -2240,11 +2240,13 @@ export default function StealthMusicPlayer({
 
   // =========================================================================
   // =========================================================================
-  // Unified Full-Song Search (Render Backend, Local, YouTube, & Catalog Fallback)
+  // Unified Full-Song Search (Render Backend, Direct Audio, YouTube, & Fallbacks)
   // =========================================================================
   const executeSearch = async (searchTerm) => {
     const query = (searchTerm !== undefined ? searchTerm : searchQuery).trim();
     if (!query) return;
+
+    const lowerQuery = query.toLowerCase();
 
     if (searchTerm !== undefined) {
       setSearchQuery(searchTerm);
@@ -2261,206 +2263,245 @@ export default function StealthMusicPlayer({
     setSearchPage(1);
     setHasMoreSearch(true);
 
-    // 1. Instant Cache Check (Sub-millisecond instant search response)
-    if (searchCacheRef.current[query] && Array.isArray(searchCacheRef.current[query]) && searchCacheRef.current[query].length > 0) {
-      setSearchResults(searchCacheRef.current[query]);
-      setIsSearching(false);
-      setHasMoreSearch(true);
-      return;
-    }
-
-    // 2. Instant Local Pre-population (0ms perceived latency so user never stares at empty screen)
-    const catalogPool = [...FEATURED_ONLINE_TRACKS, ...BACKUP_STREAM_POOL, ...tracks];
-    const initialInstantMatches = catalogPool.filter(song => {
-      const t = (song.title || '').toLowerCase();
-      const a = (song.artist || '').toLowerCase();
-      const alb = (song.album || '').toLowerCase();
-      return t.includes(lowerQuery) || a.includes(lowerQuery) || alb.includes(lowerQuery) || lowerQuery.includes(t) || lowerQuery.includes(a);
-    });
-    if (initialInstantMatches.length > 0) {
-      setSearchResults(initialInstantMatches);
-    }
-
-    // 3. Check if direct YouTube URL was pasted
-    const ytId = extractYouTubeId(query);
-    if (ytId) {
-      try {
-        const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytId}&format=json`);
-        const oembedData = await oembedRes.json();
-        const ytTrack = {
-          id: `yt-${ytId}`,
-          youtubeId: ytId,
-          title: oembedData.title || "YouTube Full Song",
-          artist: oembedData.author_name || "YouTube Music",
-          album: "YouTube Online",
-          duration: 260,
-          durationText: "Full Song",
-          isYoutube: true,
-          artwork: `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`,
-          color: "from-red-950/60 via-slate-950 to-slate-950"
-        };
-        playTrackNow(ytTrack);
-        setIsSearching(false);
-        setHasMoreSearch(false);
-        return;
-      } catch (err) {
-        const ytTrack = {
-          id: `yt-${ytId}`,
-          youtubeId: ytId,
-          title: "YouTube Audio Stream",
-          artist: "YouTube Online",
-          album: "YouTube",
-          duration: 260,
-          durationText: "Full Song",
-          isYoutube: true,
-          artwork: `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`,
-          color: "from-red-950/60 via-slate-950 to-slate-950"
-        };
-        playTrackNow(ytTrack);
-        setIsSearching(false);
-        setHasMoreSearch(false);
+    try {
+      // 1. Instant Cache Check (Sub-millisecond instant search response)
+      if (searchCacheRef.current[query] && Array.isArray(searchCacheRef.current[query]) && searchCacheRef.current[query].length > 0) {
+        setSearchResults(searchCacheRef.current[query]);
+        setHasMoreSearch(true);
         return;
       }
-    }
 
-    const fullSongResults = [];
+      // 2. Instant Local Pre-population (0ms perceived latency so user never stares at empty screen)
+      const catalogPool = [...FEATURED_ONLINE_TRACKS, ...BACKUP_STREAM_POOL, ...tracks];
+      const initialInstantMatches = catalogPool.filter(song => {
+        const t = (song.title || '').toLowerCase();
+        const a = (song.artist || '').toLowerCase();
+        const alb = (song.album || '').toLowerCase();
+        return t.includes(lowerQuery) || a.includes(lowerQuery) || alb.includes(lowerQuery) || lowerQuery.includes(t) || lowerQuery.includes(a);
+      });
+      if (initialInstantMatches.length > 0) {
+        setSearchResults(initialInstantMatches);
+      }
 
-    // 4. Fetch from high-speed backend endpoints
-    const candidateEndpoints = [];
-    const localBase = getBackendApiUrl();
-    if (localBase) {
-      candidateEndpoints.push(`${localBase}/api/music/search?q=${encodeURIComponent(query)}&page=1`);
-    }
-    if (import.meta.env?.DEV) {
-      candidateEndpoints.push(`/api/music/search?q=${encodeURIComponent(query)}&page=1`);
-    }
-    const defaultCloud = `https://secret-bubble-backend.onrender.com/api/music/search?q=${encodeURIComponent(query)}&page=1`;
-    if (!candidateEndpoints.some(u => u.includes('onrender.com'))) {
-      candidateEndpoints.push(defaultCloud);
-    }
-
-    let serverHasMore = true;
-
-    for (const url of candidateEndpoints) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4500);
-        const res = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.success && Array.isArray(data.results) && data.results.length > 0) {
-            data.results.forEach(item => {
-              const releaseYear = item.year || parseInt(item.releaseDate?.slice(0, 4), 10) || 0;
-              fullSongResults.push({
-                id: item.id || `track-${item.youtubeId || Math.random()}`,
-                title: item.title,
-                artist: item.artist,
-                album: item.album || "Full Song",
-                duration: item.duration || 240,
-                durationText: item.durationText || "Full Song",
-                artwork: item.artwork,
-                url: item.url || null,
-                youtubeId: item.youtubeId || null,
-                year: releaseYear || undefined,
-                releaseDate: item.releaseDate || null,
-                publishedTime: item.publishedTime || null,
-                recencyScore: item.recencyScore || (releaseYear ? (5000 + (releaseYear - 2000) * 100) : 500),
-                isAudioStream: Boolean(item.url),
-                isYoutube: !item.url && Boolean(item.youtubeId),
-                color: "from-purple-950/50 via-slate-950 to-slate-950"
-              });
-            });
-            if (data.hasMore === false) {
-              serverHasMore = false;
-            }
-            break; // Got valid results from online backend
-          }
+      // 3. Check if direct YouTube URL was pasted
+      const ytId = extractYouTubeId(query);
+      if (ytId) {
+        try {
+          const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytId}&format=json`);
+          const oembedData = await oembedRes.json();
+          const ytTrack = {
+            id: `yt-${ytId}`,
+            youtubeId: ytId,
+            title: oembedData.title || "YouTube Full Song",
+            artist: oembedData.author_name || "YouTube Music",
+            album: "YouTube Online",
+            duration: 260,
+            durationText: "Full Song",
+            isYoutube: true,
+            artwork: `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`,
+            color: "from-red-950/60 via-slate-950 to-slate-950"
+          };
+          playTrackNow(ytTrack);
+          setHasMoreSearch(false);
+          return;
+        } catch (err) {
+          const ytTrack = {
+            id: `yt-${ytId}`,
+            youtubeId: ytId,
+            title: "YouTube Audio Stream",
+            artist: "YouTube Online",
+            album: "YouTube",
+            duration: 260,
+            durationText: "Full Song",
+            isYoutube: true,
+            artwork: `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`,
+            color: "from-red-950/60 via-slate-950 to-slate-950"
+          };
+          playTrackNow(ytTrack);
+          setHasMoreSearch(false);
+          return;
         }
-      } catch (err) {
-        // Fallback to next candidate endpoint
       }
-    }
 
-    // 5. Fallback to YouTube search endpoint if 0 results
-    if (fullSongResults.length === 0) {
-      const ytEndpoints = [];
+      const fullSongResults = [];
+      let serverHasMore = true;
+
+      // 4. Fetch from high-speed backend endpoints
+      const candidateEndpoints = [];
+      const localBase = getBackendApiUrl();
       if (localBase) {
-        ytEndpoints.push(`${localBase}/api/music/youtube-search?q=${encodeURIComponent(query)}`);
+        candidateEndpoints.push(`${localBase}/api/music/search?q=${encodeURIComponent(query)}&page=1`);
       }
       if (import.meta.env?.DEV) {
-        ytEndpoints.push(`/api/music/youtube-search?q=${encodeURIComponent(query)}`);
+        candidateEndpoints.push(`/api/music/search?q=${encodeURIComponent(query)}&page=1`);
       }
-      const defaultYt = `https://secret-bubble-backend.onrender.com/api/music/youtube-search?q=${encodeURIComponent(query)}`;
-      if (!ytEndpoints.some(u => u.includes('onrender.com'))) {
-        ytEndpoints.push(defaultYt);
+      const defaultCloud = `https://secret-bubble-backend.onrender.com/api/music/search?q=${encodeURIComponent(query)}&page=1`;
+      if (!candidateEndpoints.some(u => u.includes('onrender.com'))) {
+        candidateEndpoints.push(defaultCloud);
       }
 
-      for (const ytUrl of ytEndpoints) {
+      for (const url of candidateEndpoints) {
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 4500);
-          const ytRes = await fetch(ytUrl, { signal: controller.signal });
+          const timeoutId = setTimeout(() => controller.abort(), 6000);
+          const res = await fetch(url, { signal: controller.signal });
           clearTimeout(timeoutId);
-          if (ytRes.ok) {
-            const ytData = await ytRes.json();
-            if (ytData?.success && Array.isArray(ytData.results) && ytData.results.length > 0) {
-              ytData.results.forEach(item => {
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.success && Array.isArray(data.results) && data.results.length > 0) {
+              data.results.forEach(item => {
+                const releaseYear = item.year || parseInt(item.releaseDate?.slice(0, 4), 10) || 0;
                 fullSongResults.push({
-                  id: item.id || `yt-${item.youtubeId}`,
-                  youtubeId: item.youtubeId,
+                  id: item.id || `track-${item.youtubeId || Math.random()}`,
                   title: item.title,
                   artist: item.artist,
-                  album: "YouTube Full Song",
+                  album: item.album || "Full Song",
                   duration: item.duration || 240,
                   durationText: item.durationText || "Full Song",
                   artwork: item.artwork,
-                  year: item.year || undefined,
+                  url: item.url || null,
+                  youtubeId: item.youtubeId || null,
+                  year: releaseYear || undefined,
+                  releaseDate: item.releaseDate || null,
                   publishedTime: item.publishedTime || null,
-                  recencyScore: item.recencyScore || 500,
-                  isYoutube: true,
-                  color: "from-red-950/50 via-slate-950 to-slate-950"
+                  recencyScore: item.recencyScore || (releaseYear ? (5000 + (releaseYear - 2000) * 100) : 500),
+                  isAudioStream: Boolean(item.url),
+                  isYoutube: !item.url && Boolean(item.youtubeId),
+                  color: "from-purple-950/50 via-slate-950 to-slate-950"
                 });
               });
-              serverHasMore = false;
-              break;
+              if (data.hasMore === false) {
+                serverHasMore = false;
+              }
+              break; // Got valid results from online backend
+            }
+          }
+        } catch (err) {
+          // Fallback to next candidate endpoint
+        }
+      }
+
+      // 5. High-Speed Direct iTunes Music API Fallback (CORS-enabled, zero cold-boot delays)
+      if (fullSongResults.length === 0) {
+        try {
+          const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=song&limit=30`;
+          const itRes = await fetch(itunesUrl);
+          if (itRes.ok) {
+            const itData = await itRes.json();
+            if (itData && Array.isArray(itData.results) && itData.results.length > 0) {
+              itData.results.forEach(item => {
+                const releaseYear = item.releaseDate ? parseInt(item.releaseDate.slice(0, 4), 10) : 0;
+                const durSecs = item.trackTimeMillis ? Math.round(item.trackTimeMillis / 1000) : 240;
+                const min = Math.floor(durSecs / 60);
+                const sec = durSecs % 60;
+                const art = (item.artworkUrl100 || '').replace('100x100bb.jpg', '600x600bb.jpg').replace('100x100bb.png', '600x600bb.png');
+
+                fullSongResults.push({
+                  id: `itunes-${item.trackId}`,
+                  title: item.trackName,
+                  artist: item.artistName,
+                  album: item.collectionName || "Single",
+                  artwork: art || item.artworkUrl100,
+                  duration: durSecs,
+                  durationText: `${min}:${sec < 10 ? '0' : ''}${sec}`,
+                  url: item.previewUrl || null,
+                  isAudioStream: Boolean(item.previewUrl),
+                  isYoutube: false,
+                  year: releaseYear || undefined,
+                  releaseDate: item.releaseDate || null,
+                  recencyScore: releaseYear ? (5000 + (releaseYear - 2000) * 100) : 500,
+                  color: "from-indigo-950/50 via-slate-950 to-slate-950"
+                });
+              });
             }
           }
         } catch (e) {}
       }
-    }
 
-    // 6. Merge with In-Memory Catalog Substring Matches
-    const seenIds = new Set(fullSongResults.map(r => r.id));
-    const matchedLocal = catalogPool.filter(song => {
-      if (seenIds.has(song.id)) return false;
-      const t = (song.title || '').toLowerCase();
-      const a = (song.artist || '').toLowerCase();
-      const alb = (song.album || '').toLowerCase();
-      return t.includes(lowerQuery) || a.includes(lowerQuery) || alb.includes(lowerQuery) || lowerQuery.includes(t) || lowerQuery.includes(a);
-    });
+      // 6. Fallback to YouTube search endpoint if still 0 results
+      if (fullSongResults.length === 0) {
+        const ytEndpoints = [];
+        if (localBase) {
+          ytEndpoints.push(`${localBase}/api/music/youtube-search?q=${encodeURIComponent(query)}`);
+        }
+        if (import.meta.env?.DEV) {
+          ytEndpoints.push(`/api/music/youtube-search?q=${encodeURIComponent(query)}`);
+        }
+        const defaultYt = `https://secret-bubble-backend.onrender.com/api/music/youtube-search?q=${encodeURIComponent(query)}`;
+        if (!ytEndpoints.some(u => u.includes('onrender.com'))) {
+          ytEndpoints.push(defaultYt);
+        }
 
-    matchedLocal.forEach(song => {
-      seenIds.add(song.id);
-      const songYear = song.year || 0;
-      fullSongResults.push({
-        ...song,
-        recencyScore: song.recencyScore || (songYear ? (5000 + (songYear - 2000) * 100) : 400)
+        for (const ytUrl of ytEndpoints) {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
+            const ytRes = await fetch(ytUrl, { signal: controller.signal });
+            clearTimeout(timeoutId);
+            if (ytRes.ok) {
+              const ytData = await ytRes.json();
+              if (ytData?.success && Array.isArray(ytData.results) && ytData.results.length > 0) {
+                ytData.results.forEach(item => {
+                  fullSongResults.push({
+                    id: item.id || `yt-${item.youtubeId}`,
+                    youtubeId: item.youtubeId,
+                    title: item.title,
+                    artist: item.artist,
+                    album: "YouTube Full Song",
+                    duration: item.duration || 240,
+                    durationText: item.durationText || "Full Song",
+                    artwork: item.artwork,
+                    year: item.year || undefined,
+                    publishedTime: item.publishedTime || null,
+                    recencyScore: item.recencyScore || 500,
+                    isYoutube: true,
+                    color: "from-red-950/50 via-slate-950 to-slate-950"
+                  });
+                });
+                serverHasMore = false;
+                break;
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
+      // 7. Merge with In-Memory Catalog Substring Matches
+      const seenIds = new Set(fullSongResults.map(r => r.id));
+      const matchedLocal = catalogPool.filter(song => {
+        if (seenIds.has(song.id)) return false;
+        const t = (song.title || '').toLowerCase();
+        const a = (song.artist || '').toLowerCase();
+        const alb = (song.album || '').toLowerCase();
+        return t.includes(lowerQuery) || a.includes(lowerQuery) || alb.includes(lowerQuery) || lowerQuery.includes(t) || lowerQuery.includes(a);
       });
-    });
 
-    // Sort so newest songs appear first, followed by older songs
-    fullSongResults.sort((a, b) => (b.recencyScore || 0) - (a.recencyScore || 0));
+      matchedLocal.forEach(song => {
+        seenIds.add(song.id);
+        const songYear = song.year || 0;
+        fullSongResults.push({
+          ...song,
+          recencyScore: song.recencyScore || (songYear ? (5000 + (songYear - 2000) * 100) : 400)
+        });
+      });
 
-    if (fullSongResults.length > 0) {
-      searchCacheRef.current[query] = fullSongResults;
-      setSearchResults(fullSongResults);
-      setHasMoreSearch(serverHasMore);
-    } else {
-      setSearchError(`No songs found for "${query}". Try searching for Arijit Singh, Sidhu Moose Wala, Kesariya, or another artist.`);
-      setHasMoreSearch(false);
+      // Sort so newest songs appear first, followed by older songs
+      fullSongResults.sort((a, b) => (b.recencyScore || 0) - (a.recencyScore || 0));
+
+      if (fullSongResults.length > 0) {
+        searchCacheRef.current[query] = fullSongResults;
+        setSearchResults(fullSongResults);
+        setHasMoreSearch(serverHasMore);
+      } else {
+        setSearchError(`No songs found for "${query}". Try searching for Arijit Singh, Sidhu Moose Wala, Kesariya, or another artist.`);
+        setHasMoreSearch(false);
+      }
+    } catch (err) {
+      console.warn('Search execution error:', err);
+      setSearchError('Search encountered an issue. Please try again.');
+    } finally {
+      setIsSearching(false);
     }
-    setIsSearching(false);
   };
 
   // Continuous Infinite Scrolling for Search Results (YouTube-style endless scroll)
@@ -2491,7 +2532,7 @@ export default function StealthMusicPlayer({
       for (const url of candidateEndpoints) {
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 5000);
+          const timeoutId = setTimeout(() => controller.abort(), 6000);
           const res = await fetch(url, { signal: controller.signal });
           clearTimeout(timeoutId);
           if (res.ok) {
@@ -2532,6 +2573,48 @@ export default function StealthMusicPlayer({
         } catch (e) {}
       }
 
+      // Fallback pagination to iTunes API if server returned no more items
+      if (newItems.length === 0) {
+        try {
+          const itunesOffset = (nextPage - 1) * 25;
+          const itRes = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&media=music&entity=song&limit=25&offset=${itunesOffset}`);
+          if (itRes.ok) {
+            const itData = await itRes.json();
+            if (itData && Array.isArray(itData.results) && itData.results.length > 0) {
+              newItems = itData.results.map(item => {
+                const releaseYear = item.releaseDate ? parseInt(item.releaseDate.slice(0, 4), 10) : 0;
+                const durSecs = item.trackTimeMillis ? Math.round(item.trackTimeMillis / 1000) : 240;
+                const min = Math.floor(durSecs / 60);
+                const sec = durSecs % 60;
+                const art = (item.artworkUrl100 || '').replace('100x100bb.jpg', '600x600bb.jpg').replace('100x100bb.png', '600x600bb.png');
+
+                return {
+                  id: `itunes-${item.trackId}`,
+                  title: item.trackName,
+                  artist: item.artistName,
+                  album: item.collectionName || "Single",
+                  artwork: art || item.artworkUrl100,
+                  duration: durSecs,
+                  durationText: `${min}:${sec < 10 ? '0' : ''}${sec}`,
+                  url: item.previewUrl || null,
+                  isAudioStream: Boolean(item.previewUrl),
+                  isYoutube: false,
+                  year: releaseYear || undefined,
+                  releaseDate: item.releaseDate || null,
+                  recencyScore: releaseYear ? (5000 + (releaseYear - 2000) * 100) : 500,
+                  color: "from-indigo-950/50 via-slate-950 to-slate-950"
+                };
+              });
+              if (itData.results.length < 25) {
+                serverHasMore = false;
+              }
+            } else {
+              serverHasMore = false;
+            }
+          }
+        } catch (e) {}
+      }
+
       if (newItems.length > 0) {
         setSearchResults(prev => {
           const seenIds = new Set(prev.map(s => s.id));
@@ -2552,7 +2635,6 @@ export default function StealthMusicPlayer({
       }
     } catch (err) {
       console.warn('Error loading more search songs:', err);
-      // Keep hasMoreSearch true so temporary network glips do not halt infinite scrolling
     } finally {
       isSearchingMoreRef.current = false;
       setIsSearchingMore(false);
@@ -2597,6 +2679,21 @@ export default function StealthMusicPlayer({
             '*'
           );
         } catch (e) {}
+      }
+
+      // For preview tracks, also resolve full YouTube video ID in background
+      if (track.id?.startsWith('itunes-') && !track.youtubeId) {
+        const q = `${track.title} ${track.artist}`;
+        const apiBase = getBackendApiUrl();
+        fetch(`${apiBase}/api/music/youtube-search?q=${encodeURIComponent(q)}`)
+          .then(r => r.json())
+          .then(data => {
+            if (data?.results?.[0]?.youtubeId) {
+              const ytId = data.results[0].youtubeId;
+              setCurrentTrack(prev => (prev?.id === track.id ? { ...prev, youtubeId: ytId } : prev));
+            }
+          })
+          .catch(() => {});
       }
     } else if (track.isYoutube && track.youtubeId) {
       if (audioRef.current) {

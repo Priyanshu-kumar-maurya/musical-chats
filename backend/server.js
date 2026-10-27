@@ -1728,6 +1728,136 @@ function setMusicFeedCache(key, data) {
   MUSIC_FEED_CACHE.set(key, { data, ts: Date.now() });
 }
 
+// Reusable YouTube Video Search Scraper (Fast fallback with oEmbed and rich recency ranking)
+async function searchYouTubeVideos(q, limit = 25) {
+  if (!q) return [];
+  try {
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q + ' full audio song')}`;
+    const ytRes = await fetch(searchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9'
+      },
+      signal: AbortSignal.timeout ? AbortSignal.timeout(6000) : undefined
+    });
+    const html = await ytRes.text();
+    const results = [];
+
+    // 1. Try parsing ytInitialData
+    const jsonMatch = html.match(/(?:var\s+)?ytInitialData\s*=\s*({.+?});/);
+    if (jsonMatch) {
+      try {
+        const data = JSON.parse(jsonMatch[1]);
+        const sections = data?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents || [];
+        for (const sec of sections) {
+          const items = sec?.itemSectionRenderer?.contents || [];
+          for (const item of items) {
+            const video = item.videoRenderer;
+            if (video && video.videoId) {
+              const durText = video.lengthText?.simpleText || '';
+              let secs = 240;
+              if (durText) {
+                const parts = durText.split(':').map(Number);
+                if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+                  secs = (parts[0] * 60) + parts[1];
+                } else if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+                  secs = (parts[0] * 3600) + (parts[1] * 60) + parts[2];
+                }
+              }
+
+              const thumbs = video.thumbnail?.thumbnails || [];
+              const bestThumb = thumbs[thumbs.length - 1]?.url || `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`;
+              const title = video.title?.runs?.[0]?.text || q;
+              const artist = video.ownerText?.runs?.[0]?.text || "YouTube Music";
+              const publishedText = video.publishedTimeText?.simpleText || '';
+
+              // Calculate recency ranking score so new songs appear first
+              let recencyScore = 500;
+              const titleLower = title.toLowerCase();
+              const currentYear = new Date().getFullYear();
+
+              const yearMatch = titleLower.match(/\b(202[0-9]|201[0-9]|200[0-9]|19[0-9]{2})\b/);
+              let videoYear = yearMatch ? parseInt(yearMatch[1], 10) : 0;
+
+              const pubLower = publishedText.toLowerCase();
+              if (pubLower.includes('second') || pubLower.includes('minute') || pubLower.includes('hour') || pubLower.includes('day') || pubLower.includes('week')) {
+                recencyScore = 10000;
+                if (!videoYear) videoYear = currentYear;
+              } else if (pubLower.includes('month')) {
+                const m = parseInt(pubLower.match(/\d+/)?.[0] || '1', 10);
+                recencyScore = 9000 - (m * 50);
+                if (!videoYear) videoYear = currentYear;
+              } else if (pubLower.includes('year')) {
+                const y = parseInt(pubLower.match(/\d+/)?.[0] || '1', 10);
+                recencyScore = 8000 - (y * 500);
+                if (!videoYear) videoYear = currentYear - y;
+              } else if (videoYear) {
+                recencyScore = 5000 + (videoYear - 2000) * 100;
+              }
+
+              if (titleLower.includes('latest') || titleLower.includes('new song') || titleLower.includes('trending') || titleLower.includes('2026') || titleLower.includes('2025')) {
+                recencyScore += 500;
+              }
+
+              results.push({
+                id: `yt-${video.videoId}`,
+                youtubeId: video.videoId,
+                title,
+                artist,
+                album: "YouTube Full Song",
+                artwork: bestThumb,
+                duration: secs,
+                durationText: durText || `${Math.floor(secs / 60)}:${secs % 60 < 10 ? '0' : ''}${secs % 60}`,
+                isYoutube: true,
+                publishedTime: publishedText,
+                year: videoYear || undefined,
+                recencyScore
+              });
+              if (results.length >= limit) break;
+            }
+          }
+          if (results.length >= limit) break;
+        }
+        results.sort((a, b) => (b.recencyScore || 0) - (a.recencyScore || 0));
+      } catch (e) {}
+    }
+
+    // 2. Fallback regex match if JSON format differed
+    if (results.length === 0) {
+      const regex = /"videoId":"([a-zA-Z0-9_-]{11})"/g;
+      let match;
+      const seenIds = new Set();
+      const videoIds = [];
+      while ((match = regex.exec(html)) !== null && videoIds.length < 10) {
+        const vId = match[1];
+        if (!seenIds.has(vId)) {
+          seenIds.add(vId);
+          videoIds.push(vId);
+        }
+      }
+
+      for (const vId of videoIds) {
+        results.push({
+          id: `yt-${vId}`,
+          youtubeId: vId,
+          title: `${q} (Full Track)`,
+          artist: "YouTube Music",
+          album: "YouTube Full Song",
+          artwork: `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`,
+          duration: 240,
+          durationText: "4:00",
+          isYoutube: true
+        });
+      }
+    }
+
+    return results;
+  } catch (err) {
+    console.error('searchYouTubeVideos error:', err.message);
+    return [];
+  }
+}
+
 // Unified Audio Search: Returns direct audio streams for continuous background playback with pagination
 app.get('/api/music/search', async (req, res) => {
   const q = (req.query.q || '').trim();
@@ -1811,7 +1941,8 @@ app.get('/api/music/search', async (req, res) => {
     if (page === 1) {
       const autoUrl = `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_marker=0&query=${encodeURIComponent(q)}&ctx=android&_format=json`;
       const autoRes = await fetch(autoUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+        signal: AbortSignal.timeout ? AbortSignal.timeout(3500) : undefined
       });
       const autoData = await autoRes.json();
       const autoSongs = autoData.songs?.data || [];
@@ -1819,7 +1950,9 @@ app.get('/api/music/search', async (req, res) => {
       if (autoSongs.length > 0) {
         const pids = autoSongs.slice(0, 15).map(s => s.id).join(',');
         const detailsUrl = `https://www.jiosaavn.com/api.php?__call=song.getDetails&cc=in&_marker=0%3F_marker%3D0&_format=json&pids=${pids}`;
-        const detRes = await fetch(detailsUrl);
+        const detRes = await fetch(detailsUrl, {
+          signal: AbortSignal.timeout ? AbortSignal.timeout(3500) : undefined
+        });
         const detData = await detRes.json();
 
         for (const s of autoSongs.slice(0, 15)) {
@@ -1861,16 +1994,25 @@ app.get('/api/music/search', async (req, res) => {
         return res.json(payload);
       }
 
-      // Fallback to YouTube scraper on page 1 if no direct audio was found
-      return res.redirect(`/api/music/youtube-search?q=${encodeURIComponent(q)}`);
+      // Fallback directly to YouTube scraper on page 1 without 302 redirect
+      const ytResults = await searchYouTubeVideos(q, limit);
+      const payload = { success: true, page: 1, total: ytResults.length, results: ytResults, hasMore: false, source: 'youtube-fallback' };
+      setMusicSearchCache(cacheKey, payload);
+      return res.json(payload);
     }
 
     // For page > 1 with no results, return clean empty list with hasMore: false
     return res.json({ success: true, page, total: totalResults, results: [], hasMore: false });
   } catch (err) {
-    console.error('Unified audio search error:', err);
+    console.error('Unified audio search error:', err.message);
     if (page === 1) {
-      return res.redirect(`/api/music/youtube-search?q=${encodeURIComponent(q)}`);
+      try {
+        const ytResults = await searchYouTubeVideos(q, limit);
+        if (ytResults.length > 0) {
+          const payload = { success: true, page: 1, total: ytResults.length, results: ytResults, hasMore: false, source: 'youtube-fallback' };
+          return res.json(payload);
+        }
+      } catch (e) {}
     }
     return res.json({ success: false, page, results: [], hasMore: false, error: err.message });
   }
@@ -2378,147 +2520,7 @@ app.get('/api/music/youtube-search', async (req, res) => {
   }
 
   try {
-    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q + ' full audio song')}`;
-    const ytRes = await fetch(searchUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9'
-      }
-    });
-    const html = await ytRes.text();
-    const results = [];
-
-    // 1. Try parsing ytInitialData
-    const jsonMatch = html.match(/(?:var\s+)?ytInitialData\s*=\s*({.+?});/);
-    if (jsonMatch) {
-      try {
-        const data = JSON.parse(jsonMatch[1]);
-        const sections = data?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents || [];
-        for (const sec of sections) {
-          const items = sec?.itemSectionRenderer?.contents || [];
-          for (const item of items) {
-            const video = item.videoRenderer;
-            if (video && video.videoId) {
-              const durText = video.lengthText?.simpleText || '';
-              let secs = 240;
-              if (durText) {
-                const parts = durText.split(':').map(Number);
-                if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-                  secs = (parts[0] * 60) + parts[1];
-                } else if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
-                  secs = (parts[0] * 3600) + (parts[1] * 60) + parts[2];
-                }
-              }
-
-              const thumbs = video.thumbnail?.thumbnails || [];
-              const bestThumb = thumbs[thumbs.length - 1]?.url || `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`;
-              const title = video.title?.runs?.[0]?.text || q;
-              const artist = video.ownerText?.runs?.[0]?.text || "YouTube Music";
-              const publishedText = video.publishedTimeText?.simpleText || '';
-
-              // Calculate recency ranking score so new songs appear first
-              let recencyScore = 500;
-              const titleLower = title.toLowerCase();
-              const currentYear = new Date().getFullYear();
-
-              const yearMatch = titleLower.match(/\b(202[0-9]|201[0-9]|200[0-9]|19[0-9]{2})\b/);
-              let videoYear = yearMatch ? parseInt(yearMatch[1], 10) : 0;
-
-              const pubLower = publishedText.toLowerCase();
-              if (pubLower.includes('second') || pubLower.includes('minute') || pubLower.includes('hour') || pubLower.includes('day') || pubLower.includes('week')) {
-                recencyScore = 10000;
-                if (!videoYear) videoYear = currentYear;
-              } else if (pubLower.includes('month')) {
-                const m = parseInt(pubLower.match(/\d+/)?.[0] || '1', 10);
-                recencyScore = 9000 - (m * 50);
-                if (!videoYear) videoYear = currentYear;
-              } else if (pubLower.includes('year')) {
-                const y = parseInt(pubLower.match(/\d+/)?.[0] || '1', 10);
-                recencyScore = 8000 - (y * 500);
-                if (!videoYear) videoYear = currentYear - y;
-              } else if (videoYear) {
-                recencyScore = 5000 + (videoYear - 2000) * 100;
-              }
-
-              if (titleLower.includes('latest') || titleLower.includes('new song') || titleLower.includes('trending') || titleLower.includes('2026') || titleLower.includes('2025')) {
-                recencyScore += 500;
-              }
-
-              results.push({
-                id: `yt-${video.videoId}`,
-                youtubeId: video.videoId,
-                title,
-                artist,
-                album: "YouTube Full Song",
-                artwork: bestThumb,
-                duration: secs,
-                durationText: durText || `${Math.floor(secs / 60)}:${secs % 60 < 10 ? '0' : ''}${secs % 60}`,
-                isYoutube: true,
-                publishedTime: publishedText,
-                year: videoYear || undefined,
-                recencyScore
-              });
-              if (results.length >= 25) break;
-            }
-          }
-          if (results.length >= 25) break;
-        }
-
-        // Sort so newest songs appear first, followed by older songs
-        results.sort((a, b) => (b.recencyScore || 0) - (a.recencyScore || 0));
-      } catch (e) {}
-    }
-
-    // 2. Fallback regex match if JSON format differed
-    if (results.length === 0) {
-      const regex = /"videoId":"([a-zA-Z0-9_-]{11})"/g;
-      let match;
-      const seenIds = new Set();
-      const videoIds = [];
-      while ((match = regex.exec(html)) !== null && videoIds.length < 10) {
-        const vId = match[1];
-        if (!seenIds.has(vId)) {
-          seenIds.add(vId);
-          videoIds.push(vId);
-        }
-      }
-
-      // Query oEmbed for metadata in parallel
-      const oembedPromises = videoIds.map(async (vId) => {
-        try {
-          const oeRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${vId}&format=json`);
-          if (oeRes.ok) {
-            const oeData = await oeRes.json();
-            return {
-              id: `yt-${vId}`,
-              youtubeId: vId,
-              title: oeData.title || `${q} (Full Track)`,
-              artist: oeData.author_name || "YouTube Music",
-              album: "YouTube Full Song",
-              artwork: oeData.thumbnail_url || `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`,
-              duration: 240,
-              durationText: "4:00",
-              isYoutube: true
-            };
-          }
-        } catch (e) {}
-        return {
-          id: `yt-${vId}`,
-          youtubeId: vId,
-          title: `${q} (Full Track)`,
-          artist: "YouTube Music",
-          album: "YouTube Full Song",
-          artwork: `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`,
-          duration: 240,
-          durationText: "4:00",
-          isYoutube: true
-        };
-      });
-
-      const oembedResults = await Promise.all(oembedPromises);
-      results.push(...oembedResults);
-    }
-
+    const results = await searchYouTubeVideos(q, 25);
     res.json({ success: true, results });
   } catch (err) {
     console.error('YouTube search error:', err);
