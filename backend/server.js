@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -5,6 +6,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { MongoClient } = require('mongodb');
 
 const app = express();
 
@@ -96,6 +98,188 @@ const DB_AI_TRAINING_FILE = path.join(__dirname, 'ai_training_data.json');
 const DB_GROUPS_FILE = path.join(__dirname, 'groups.json');
 const DB_ANALYTICS_FILE = path.join(__dirname, 'analytics_daily.json');
 
+// =========================================================================
+// MongoDB Atlas Cloud Database Engine (Hybrid Cloud + Local Disk Fallback)
+// =========================================================================
+let mongoClient = null;
+let mongoDb = null;
+let isMongoConnected = false;
+const MONGODB_URI = process.env.MONGODB_URI || '';
+
+// In-Memory Global State (Pre-initialized to avoid Temporal Dead Zone in loaders)
+let users = [];
+let messages = [];
+let groups = [];
+let aiTrainingData = null;
+let analyticsData = null;
+
+function deduplicateMessageArray(arr) {
+  if (!Array.isArray(arr)) return [];
+  const map = new Map();
+  arr.forEach(m => {
+    if (m && m.id) {
+      map.set(m.id, { ...(map.get(m.id) || {}), ...m });
+    }
+  });
+  return Array.from(map.values()).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+}
+
+async function initMongoDB() {
+  if (!MONGODB_URI) {
+    console.log('[Database] ℹ️ No MONGODB_URI found. Running on local disk JSON storage.');
+    return;
+  }
+
+  try {
+    console.log('[Database] Connecting to MongoDB Atlas cloud database...');
+    mongoClient = new MongoClient(MONGODB_URI, {
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 8000,
+      connectTimeoutMS: 10000
+    });
+
+    await mongoClient.connect();
+    mongoDb = mongoClient.db('secretbubble');
+    isMongoConnected = true;
+    console.log('[Database] ✅ Successfully connected to MongoDB Atlas (secretbubble)');
+
+    const messagesCol = mongoDb.collection('messages');
+    const usersCol = mongoDb.collection('users');
+    const groupsCol = mongoDb.collection('groups');
+    const aiCol = mongoDb.collection('ai_training');
+    const analyticsCol = mongoDb.collection('analytics');
+
+    // Build indexes
+    await messagesCol.createIndex({ id: 1 }, { unique: true }).catch(() => {});
+    await messagesCol.createIndex({ recipientId: 1, senderId: 1 }).catch(() => {});
+    await messagesCol.createIndex({ roomId: 1 }).catch(() => {});
+    await messagesCol.createIndex({ timestamp: 1 }).catch(() => {});
+    await usersCol.createIndex({ id: 1 }, { unique: true }).catch(() => {});
+    await usersCol.createIndex({ username: 1 }, { unique: true, sparse: true }).catch(() => {});
+    await groupsCol.createIndex({ id: 1 }, { unique: true }).catch(() => {});
+
+    // Initial 2-Way Sync / Migration:
+    // 1. Messages:
+    const cloudMessages = await messagesCol.find({}, { projection: { _id: 0 } }).toArray().catch(() => []);
+    if (cloudMessages && cloudMessages.length > 0) {
+      console.log(`[Database] Loaded ${cloudMessages.length} messages from MongoDB Atlas cloud.`);
+      const existingIds = new Set(cloudMessages.map(m => m.id));
+      const diskOnly = messages.filter(m => m && m.id && !existingIds.has(m.id));
+      if (diskOnly.length > 0) {
+        console.log(`[Database] Syncing ${diskOnly.length} local messages up to MongoDB Atlas...`);
+        const ops = diskOnly.map(m => ({
+          updateOne: {
+            filter: { id: m.id },
+            update: { $set: m },
+            upsert: true
+          }
+        }));
+        await messagesCol.bulkWrite(ops, { ordered: false }).catch(() => {});
+      }
+      messages = deduplicateMessageArray([...cloudMessages, ...diskOnly]);
+      saveMessagesToDisk(messages);
+    } else if (messages.length > 0) {
+      console.log(`[Database] Uploading ${messages.length} existing local messages to MongoDB Atlas cloud...`);
+      const ops = messages.map(m => ({
+        updateOne: {
+          filter: { id: m.id },
+          update: { $set: m },
+          upsert: true
+        }
+      }));
+      await messagesCol.bulkWrite(ops, { ordered: false }).catch(() => {});
+    }
+
+    // 2. Users:
+    const cloudUsers = await usersCol.find({}, { projection: { _id: 0 } }).toArray().catch(() => []);
+    if (cloudUsers && cloudUsers.length > 0) {
+      console.log(`[Database] Loaded ${cloudUsers.length} users from MongoDB Atlas cloud.`);
+      const existingUserIds = new Set(cloudUsers.map(u => u.id));
+      const diskOnlyUsers = users.filter(u => u && u.id && !existingUserIds.has(u.id));
+      if (diskOnlyUsers.length > 0) {
+        const ops = diskOnlyUsers.map(u => ({
+          updateOne: {
+            filter: { id: u.id },
+            update: { $set: u },
+            upsert: true
+          }
+        }));
+        await usersCol.bulkWrite(ops, { ordered: false }).catch(() => {});
+      }
+      const userMap = new Map();
+      [...cloudUsers, ...diskOnlyUsers].forEach(u => { if (u && u.id) userMap.set(u.id, u); });
+      users = Array.from(userMap.values());
+      saveUsersToDisk(users);
+    } else if (users.length > 0) {
+      const ops = users.map(u => ({
+        updateOne: {
+          filter: { id: u.id },
+          update: { $set: u },
+          upsert: true
+        }
+      }));
+      await usersCol.bulkWrite(ops, { ordered: false }).catch(() => {});
+    }
+
+    // 3. Groups:
+    const cloudGroups = await groupsCol.find({}, { projection: { _id: 0 } }).toArray().catch(() => []);
+    if (cloudGroups && cloudGroups.length > 0) {
+      const groupMap = new Map();
+      cloudGroups.forEach(g => { if (g && g.id) groupMap.set(g.id, g); });
+      groups = Array.from(groupMap.values());
+      saveGroupsToDisk(groups);
+    } else if (groups.length > 0) {
+      const ops = groups.map(g => ({
+        updateOne: {
+          filter: { id: g.id },
+          update: { $set: g },
+          upsert: true
+        }
+      }));
+      await groupsCol.bulkWrite(ops, { ordered: false }).catch(() => {});
+    }
+
+    // 4. AI Training:
+    const cloudAi = await aiCol.findOne({ id: 'meta_ai_training_config' }).catch(() => null);
+    if (cloudAi && cloudAi.data) {
+      aiTrainingData = cloudAi.data;
+      saveAiTrainingDataToDisk(aiTrainingData);
+    } else if (aiTrainingData) {
+      await aiCol.updateOne(
+        { id: 'meta_ai_training_config' },
+        { $set: { id: 'meta_ai_training_config', data: aiTrainingData, updatedAt: new Date().toISOString() } },
+        { upsert: true }
+      ).catch(() => {});
+    }
+
+    // 5. Analytics:
+    const cloudAnalytics = await analyticsCol.findOne({ id: 'daily_analytics_data' }).catch(() => null);
+    if (cloudAnalytics && cloudAnalytics.data) {
+      analyticsData = cloudAnalytics.data;
+      saveAnalyticsToDisk(analyticsData);
+    } else if (analyticsData) {
+      await analyticsCol.updateOne(
+        { id: 'daily_analytics_data' },
+        { $set: { id: 'daily_analytics_data', data: analyticsData, updatedAt: new Date().toISOString() } },
+        { upsert: true }
+      ).catch(() => {});
+    }
+
+    mongoClient.on('close', () => {
+      isMongoConnected = false;
+      console.warn('[Database] MongoDB Atlas connection closed. Active fallback: local disk.');
+    });
+    mongoClient.on('error', (err) => {
+      console.warn('[Database] MongoDB Atlas error:', err?.message || err);
+    });
+
+  } catch (err) {
+    isMongoConnected = false;
+    console.error('[Database] Failed to connect to MongoDB Atlas:', err.message);
+    console.log('[Database] Active fallback: local disk JSON storage.');
+  }
+}
+
 // Meta AI Assistant Bot Profile
 const META_AI_BOT = {
   id: 'user-meta-ai',
@@ -123,13 +307,24 @@ function loadAiTrainingData() {
   };
 }
 
-function saveAiTrainingData(data) {
+function saveAiTrainingDataToDisk(data) {
   try {
     fs.writeFileSync(DB_AI_TRAINING_FILE, JSON.stringify(data, null, 2), 'utf8');
   } catch (err) {}
 }
 
-let aiTrainingData = loadAiTrainingData();
+function saveAiTrainingData(data) {
+  saveAiTrainingDataToDisk(data);
+  if (isMongoConnected && mongoDb) {
+    mongoDb.collection('ai_training').updateOne(
+      { id: 'meta_ai_training_config' },
+      { $set: { id: 'meta_ai_training_config', data, updatedAt: new Date().toISOString() } },
+      { upsert: true }
+    ).catch(() => {});
+  }
+}
+
+aiTrainingData = loadAiTrainingData();
 
 // Conversation Memory per user (stores last 10 messages)
 const userAiMemory = new Map();
@@ -291,7 +486,14 @@ function loadUsers() {
       const raw = fs.readFileSync(DB_USERS_FILE, 'utf8');
       if (raw && raw.trim()) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          if (Array.isArray(users) && users.length > 0) {
+            const userMap = new Map();
+            [...parsed, ...users].forEach(u => { if (u && u.id) userMap.set(u.id, u); });
+            return Array.from(userMap.values());
+          }
+          return parsed;
+        }
       }
     }
     // Redundancy: Check backup file if primary file was wiped or empty
@@ -301,7 +503,7 @@ function loadUsers() {
         const parsedBackup = JSON.parse(rawBackup);
         if (Array.isArray(parsedBackup) && parsedBackup.length > 0) {
           console.log(`[Persistence] Restored ${parsedBackup.length} user accounts from backup file.`);
-          saveUsers(parsedBackup);
+          saveUsersToDisk(parsedBackup);
           return parsedBackup;
         }
       }
@@ -309,10 +511,11 @@ function loadUsers() {
   } catch (err) {
     console.error('Error loading users from disk:', err);
   }
+  if (Array.isArray(users) && users.length > 0) return users;
   return [];
 }
 
-function saveUsers(usersList) {
+function saveUsersToDisk(usersList) {
   try {
     const jsonStr = JSON.stringify(usersList, null, 2);
     fs.writeFileSync(DB_USERS_FILE, jsonStr, 'utf8');
@@ -324,7 +527,28 @@ function saveUsers(usersList) {
   }
 }
 
-let users = loadUsers();
+function saveUsers(usersList) {
+  saveUsersToDisk(usersList);
+  if (isMongoConnected && mongoDb) {
+    try {
+      const usersCol = mongoDb.collection('users');
+      const ops = usersList.map(u => ({
+        updateOne: {
+          filter: { id: u.id },
+          update: { $set: u },
+          upsert: true
+        }
+      }));
+      if (ops.length > 0) {
+        usersCol.bulkWrite(ops, { ordered: false }).catch(err => {
+          console.warn('[Database] Async MongoDB user bulk save warning:', err.message);
+        });
+      }
+    } catch (err) {}
+  }
+}
+
+users = loadUsers();
 
 // =========================================================================
 // Telemetry & Activity Analytics Engine
@@ -351,7 +575,7 @@ function loadAnalytics() {
   };
 }
 
-function saveAnalytics(data) {
+function saveAnalyticsToDisk(data) {
   try {
     fs.writeFileSync(DB_ANALYTICS_FILE, JSON.stringify(data, null, 2), 'utf8');
   } catch (err) {
@@ -359,7 +583,18 @@ function saveAnalytics(data) {
   }
 }
 
-let analyticsData = loadAnalytics();
+function saveAnalytics(data) {
+  saveAnalyticsToDisk(data);
+  if (isMongoConnected && mongoDb) {
+    mongoDb.collection('analytics').updateOne(
+      { id: 'daily_analytics_data' },
+      { $set: { id: 'daily_analytics_data', data, updatedAt: new Date().toISOString() } },
+      { upsert: true }
+    ).catch(() => {});
+  }
+}
+
+analyticsData = loadAnalytics();
 
 function recordUserActivity({ userId, username, activityType = 'active', trackTitle, meta, isGuest }) {
   try {
@@ -489,8 +724,8 @@ function loadMessages() {
     }
     if (raw && raw.trim()) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed.map(m => {
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const diskParsed = parsed.map(m => {
           let text = m.text;
           if (m.encryptedPayload) {
             const decrypted = decryptMessageText(m.encryptedPayload);
@@ -519,15 +754,21 @@ function loadMessages() {
             e2eeEnvelope: m.e2eeEnvelope || null
           };
         });
+
+        if (Array.isArray(messages) && messages.length > 0) {
+          return deduplicateMessageArray([...diskParsed, ...messages]);
+        }
+        return diskParsed;
       }
     }
   } catch (err) {
     console.error('Error loading messages from disk:', err);
   }
+  if (Array.isArray(messages) && messages.length > 0) return messages;
   return [];
 }
 
-function saveMessages(msgs) {
+function saveMessagesToDisk(msgs) {
   try {
     const diskMessages = msgs.map(m => {
       const copy = { ...m };
@@ -552,7 +793,28 @@ function saveMessages(msgs) {
   }
 }
 
-let messages = loadMessages();
+function saveMessages(msgs) {
+  saveMessagesToDisk(msgs);
+  if (isMongoConnected && mongoDb) {
+    try {
+      const messagesCol = mongoDb.collection('messages');
+      const ops = msgs.slice(-500).map(m => ({
+        updateOne: {
+          filter: { id: m.id },
+          update: { $set: m },
+          upsert: true
+        }
+      }));
+      if (ops.length > 0) {
+        messagesCol.bulkWrite(ops, { ordered: false }).catch(err => {
+          console.warn('[Database] Async MongoDB bulk save warning:', err.message);
+        });
+      }
+    } catch (err) {}
+  }
+}
+
+messages = loadMessages();
 const onlineUsers = new Map();
 
 // =========================================================================
@@ -573,19 +835,46 @@ function loadGroups() {
   try {
     if (fs.existsSync(DB_GROUPS_FILE)) {
       const parsed = JSON.parse(fs.readFileSync(DB_GROUPS_FILE, 'utf8'));
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(groups) && groups.length > 0) {
+          const groupMap = new Map();
+          [...parsed, ...groups].forEach(g => { if (g && g.id) groupMap.set(g.id, g); });
+          return Array.from(groupMap.values());
+        }
+        return parsed;
+      }
     }
   } catch (err) {}
+  if (Array.isArray(groups) && groups.length > 0) return groups;
   return [DEFAULT_GLOBAL_GROUP];
 }
 
-function saveGroups(groupsList) {
+function saveGroupsToDisk(groupsList) {
   try {
     fs.writeFileSync(DB_GROUPS_FILE, JSON.stringify(groupsList, null, 2), 'utf8');
   } catch (err) {}
 }
 
-let groups = loadGroups();
+function saveGroups(groupsList) {
+  saveGroupsToDisk(groupsList);
+  if (isMongoConnected && mongoDb) {
+    try {
+      const groupsCol = mongoDb.collection('groups');
+      const ops = groupsList.map(g => ({
+        updateOne: {
+          filter: { id: g.id },
+          update: { $set: g },
+          upsert: true
+        }
+      }));
+      if (ops.length > 0) {
+        groupsCol.bulkWrite(ops, { ordered: false }).catch(() => {});
+      }
+    } catch (err) {}
+  }
+}
+
+groups = loadGroups();
 
 // Periodic cleanup of expired disappearing messages (only strictly valid positive future timestamps)
 // CRITICAL: Unread direct messages are never purged before the recipient sees them!
@@ -1219,6 +1508,21 @@ app.post('/api/users/profile', (req, res) => {
       avatarColor: user.avatarColor,
       avatarUrl: user.avatarUrl,
       bio: user.bio
+    }
+  });
+});
+
+// Database Connection & Persistence Status Endpoint
+app.get('/api/database/status', (req, res) => {
+  res.json({
+    success: true,
+    connected: isMongoConnected,
+    provider: isMongoConnected ? 'MongoDB Atlas Cloud' : 'Local Disk JSON Storage',
+    databaseName: isMongoConnected ? 'secretbubble' : null,
+    stats: {
+      messagesCount: messages.length,
+      usersCount: users.length,
+      groupsCount: groups.length
     }
   });
 });
@@ -3806,6 +4110,7 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', async () => {
   console.log('🚀 Secret-Bubble (Meta AI Trainable Engine) running on http://0.0.0.0:' + PORT);
+  await initMongoDB();
 });
