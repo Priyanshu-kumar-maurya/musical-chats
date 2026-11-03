@@ -348,6 +348,17 @@ export default function PrivacySettingsModal({
 
               <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
                 <div className="flex items-center gap-2">
+                  <EyeOff className="w-4 h-4 text-emerald-400" />
+                  <div>
+                    <p className="font-semibold text-white text-[11px]">LocalStorage Vault & Anti-Inspect Shield</p>
+                    <p className="text-[10px] text-slate-400">AES-256 Client-Side Ciphertext (Zero Plaintext in DevTools)</p>
+                  </div>
+                </div>
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
+                <div className="flex items-center gap-2">
                   <Key className="w-4 h-4 text-purple-400" />
                   <div>
                     <p className="font-semibold text-white text-[11px]">Password Security Vault</p>

@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
 import { io } from 'socket.io-client';
-import { Shield, Lock, Globe, EyeOff, Bot, Sparkles } from 'lucide-react';
+import { Shield, Lock, Globe, EyeOff, Bot, Sparkles, ShieldAlert } from 'lucide-react';
 import StealthMusicPlayer from './components/StealthMusicPlayer';
 import LoginPage from './components/LoginPage';
 import AdminDashboard from './components/AdminDashboard';
 import { useBiometrics } from './hooks/useBiometrics';
 import { decryptE2EE, isE2EEEncrypted } from './utils/e2eeCrypto';
+import { subscribeDevToolsDetection } from './utils/antiInspectShield';
 
 // Code-split heavy modals and chat components for fast initial load
 const ChatHeader = lazy(() => import('./components/ChatHeader'));
@@ -470,6 +471,7 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isAppLocked, setIsAppLocked] = useState(false);
   const [isWindowBlurred, setIsWindowBlurred] = useState(false);
+  const [isDevToolsInspecting, setIsDevToolsInspecting] = useState(false);
   const [typingUsers, setTypingUsers] = useState({});
   const [unreadCounts, setUnreadCounts] = useState(() => {
     try {
@@ -643,6 +645,14 @@ export default function App() {
       window.removeEventListener('focus', handleFocus);
     };
   }, [settings.antiShoulderSurfing]);
+
+  // Real-Time DevTools Anti-Inspection Privacy Shield
+  useEffect(() => {
+    const unsubscribe = subscribeDevToolsDetection((isOpen) => {
+      setIsDevToolsInspecting(isOpen);
+    });
+    return unsubscribe;
+  }, []);
 
   // Automatic Idle Inactivity Lock Timer
   useEffect(() => {
@@ -1579,6 +1589,28 @@ export default function App() {
             className="mt-5 px-6 py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl text-xs shadow-lg transition"
           >
             Resume Chat
+          </button>
+        </div>
+      )}
+
+      {/* Anti-Inspection DevTools Privacy Shield */}
+      {isDevToolsInspecting && !isAppLocked && (
+        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-3xl flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-150">
+          <div className="w-16 h-16 rounded-2xl bg-rose-600/20 border border-rose-500/40 text-rose-400 flex items-center justify-center mb-4 shadow-xl shadow-rose-600/20 animate-pulse">
+            <ShieldAlert className="w-8 h-8" />
+          </div>
+          <h3 className="text-xl font-bold text-white mb-1">Developer Inspection Shield Active</h3>
+          <p className="text-xs text-slate-300 max-w-sm mb-2">
+            DevTools inspection has been detected. All chat buffers are obscured and local vaults are encrypted with AES-256 to protect your conversations.
+          </p>
+          <p className="text-[11px] text-slate-500 max-w-xs mb-5">
+            Close Developer Tools (F12) to reveal your chat or switch to Stealth Mode.
+          </p>
+          <button
+            onClick={() => setIsStealthMode(true)}
+            className="px-6 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl text-xs shadow-lg transition"
+          >
+            Hide into Stealth Music Player
           </button>
         </div>
       )}
